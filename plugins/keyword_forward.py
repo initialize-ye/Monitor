@@ -11,7 +11,7 @@ from nonebot.exception import FinishedException
 from nonebot.rule import is_type
 
 from rules import find_rule, load_rules, normalize_rule, save_rules, upsert_rule
-from reminders import load_reminders, save_reminders, normalize_reminder, next_reminder_id
+from .remind import handle_command as _handle_remind_command
 
 
 def _parse_int_set(raw: str) -> set[int]:
@@ -210,14 +210,6 @@ def _render_rule(rule: dict) -> str:
     )
 
 
-def _render_reminder(rem: dict) -> str:
-    return (
-        f"编号: {rem['id']}\n"
-        f"时间: {rem['hour']:02d}:{rem['minute']:02d} 每天\n"
-        f"内容: {rem['message']}\n"
-        f"目标QQ: {', '.join(map(str, rem['targets'])) or '无'}\n"
-        f"状态: {'启用' if rem['enabled'] else '禁用'}"
-    )
 
 
 async def _reply_private(bot: Bot, user_id: int, message: str) -> None:
@@ -294,7 +286,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         if not rules:
             await _reply_private(bot, user_id, "当前没有任何群规则")
             return
-        group_id_arg, _, _ = _resolve_group_id(text)
+        group_id_arg, _ = _resolve_group_id(text)
         if group_id_arg is not None:
             rule = find_rule(rules, group_id_arg)
             if not rule:
@@ -306,7 +298,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         return
 
     if command in {"on", "off"}:
-        group_id_arg, _, _ = _resolve_group_id(text)
+        group_id_arg, _ = _resolve_group_id(text)
         if group_id_arg is None and len(rules) != 1:
             await _reply_private(bot, user_id, "存在多个群规则，请指定群号: on <群号>")
             return
@@ -321,7 +313,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         return
 
     if command in {"add", "remove", "set"}:
-        group_id_arg, keyword, _ = _resolve_group_id(text)
+        group_id_arg, keyword = _resolve_group_id(text)
         if not keyword:
             await _reply_private(bot, user_id, f"用法: {command} [群号] <关键词>")
             return
@@ -347,183 +339,6 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         return
 
     await _reply_private(bot, user_id, _build_admin_help())
-
-
-# --- remind commands ---
-
-async def _handle_remind_command(bot: Bot, user_id: int, parts: list[str]) -> None:
-    if len(parts) < 2:
-        await _reply_private(bot, user_id, "用法: remind add/remove/list")
-        return
-
-    sub = parts[1].lower()
-
-    if sub == "list":
-        try:
-            reminders = load_reminders()
-        except (RuntimeError, ValueError) as exc:
-            await _reply_private(bot, user_id, f"加载提醒失败: {exc}")
-            return
-        if not reminders:
-            await _reply_private(bot, user_id, "当前没有任何提醒")
-            return
-        await _reply_private(bot, user_id, "\n\n".join(_render_reminder(r) for r in reminders))
-        return
-
-    if sub == "add":
-        # remind add 10:00 背单词
-        if len(parts) < 4 or not parts[2].strip() or not parts[3].strip():
-            await _reply_private(bot, user_id, "用法: remind add <HH:MM> <内容>")
-            return
-        time_str = parts[2].strip()
-        message = parts[3].strip()
-        match = re.match(r"^(\d{1,2}):(\d{2})$", time_str)
-        if not match:
-            await _reply_private(bot, user_id, "时间格式错误，请使用 HH:MM，例如 10:00")
-            return
-        hour, minute = int(match.group(1)), int(match.group(2))
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            await _reply_private(bot, user_id, "时间范围错误，小时 0-23，分钟 0-59")
-            return
-
-        try:
-            reminders = load_reminders()
-        except (RuntimeError, ValueError):
-            reminders = []
-
-        new_rem = normalize_reminder({
-            "id": next_reminder_id(reminders),
-            "hour": hour,
-            "minute": minute,
-            "message": message,
-            "targets": sorted(TARGET_QQS),
-            "enabled": True,
-        })
-        reminders.append(new_rem)
-        try:
-            save_reminders(reminders)
-        except OSError as exc:
-            await _reply_private(bot, user_id, f"保存失败: {exc}")
-            return
-
-        _schedule_reminder(new_rem)
-        await _reply_private(bot, user_id, f"已添加提醒\n{_render_reminder(new_rem)}")
-        return
-
-    if sub in {"remove", "del"}:
-        if len(parts) < 3 or not parts[2].strip():
-            await _reply_private(bot, user_id, "用法: remind remove <编号>")
-            return
-        try:
-            rem_id = int(parts[2].strip())
-        except ValueError:
-            await _reply_private(bot, user_id, "编号必须是数字")
-            return
-
-        try:
-            reminders = load_reminders()
-        except (RuntimeError, ValueError) as exc:
-            await _reply_private(bot, user_id, f"加载提醒失败: {exc}")
-            return
-
-        target = next((r for r in reminders if r["id"] == rem_id), None)
-        if not target:
-            await _reply_private(bot, user_id, f"编号 {rem_id} 不存在")
-            return
-
-        reminders = [r for r in reminders if r["id"] != rem_id]
-        try:
-            save_reminders(reminders)
-        except OSError as exc:
-            await _reply_private(bot, user_id, f"保存失败: {exc}")
-            return
-
-        _unschedule_reminder(rem_id)
-        await _reply_private(bot, user_id, f"已删除提醒 {rem_id}")
-        return
-
-    await _reply_private(bot, user_id, "用法: remind add/remove/list")
-
-
-# --- reminder scheduling ---
-
-_scheduled_jobs: dict[int, object] = {}
-
-
-def _schedule_reminder(rem: dict) -> None:
-    if not rem["enabled"]:
-        return
-    try:
-        from nonebot_plugin_apscheduler import scheduler
-        job_id = f"remind_{rem['id']}"
-        scheduler.add_job(
-            _fire_reminder,
-            "cron",
-            hour=rem["hour"],
-            minute=rem["minute"],
-            id=job_id,
-            replace_existing=True,
-            args=[rem["id"]],
-        )
-        _scheduled_jobs[rem["id"]] = job_id
-        logger.info("Scheduled reminder %s at %02d:%02d", rem["id"], rem["hour"], rem["minute"])
-    except Exception as exc:
-        logger.error("Failed to schedule reminder %s: %s", rem["id"], exc)
-
-
-def _unschedule_reminder(rem_id: int) -> None:
-    job_id = _scheduled_jobs.pop(rem_id, None)
-    if job_id is None:
-        return
-    try:
-        from nonebot_plugin_apscheduler import scheduler
-        scheduler.remove_job(job_id)
-        logger.info("Unscheduled reminder %s", rem_id)
-    except Exception:
-        pass
-
-
-async def _fire_reminder(rem_id: int) -> None:
-    try:
-        reminders = load_reminders()
-    except (RuntimeError, ValueError):
-        logger.error("Failed to load reminders for firing")
-        return
-
-    rem = next((r for r in reminders if r["id"] == rem_id), None)
-    if not rem or not rem["enabled"]:
-        return
-
-    bots = list(nonebot.get_bots().values())
-    if not bots:
-        logger.warning("No bot available to send reminder %s", rem_id)
-        return
-
-    bot = bots[0]
-    text = f"[提醒] {rem['message']}"
-    for target_qq in rem["targets"]:
-        try:
-            await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=text)
-        except Exception as exc:
-            logger.error("Failed to send reminder %s to %s: %s", rem_id, target_qq, exc)
-
-    logger.info("Fired reminder %s: %s", rem_id, rem["message"])
-
-
-def _restore_reminders() -> None:
-    try:
-        reminders = load_reminders()
-    except (RuntimeError, ValueError):
-        logger.warning("No reminders to restore")
-        return
-    for rem in reminders:
-        rem = normalize_reminder(rem)
-        _schedule_reminder(rem)
-    if reminders:
-        logger.info("Restored %d reminders", len(reminders))
-
-
-# --- advanced rule commands ---
 
 async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> None:
     if len(parts) < 2:
@@ -632,20 +447,10 @@ async def handle_admin_command(bot: Bot, event: PrivateMessageEvent) -> None:
         raise FinishedException
 
     if first_word == "remind":
-        await _handle_remind_command(bot, event.user_id, text.split(maxsplit=3))
+        await _handle_remind_command(bot, event.user_id, text)
     elif first_word == "rule":
         await _handle_rule_advanced(bot, event.user_id, text.split(maxsplit=3))
     else:
         await _handle_command(bot, event.user_id, first_word, text)
 
     raise FinishedException
-
-
-# --- restore reminders on bot startup ---
-
-driver = nonebot.get_driver()
-
-
-@driver.on_startup
-async def _on_startup() -> None:
-    _restore_reminders()

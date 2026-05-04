@@ -14,7 +14,8 @@ rules.py                      # 共享模块：rules.json 的加载、保存、�
 reminders.py                  # 共享模块：reminders.json 的加载、保存、规范化（原子写入）
 plugins/
   __init__.py
-  keyword_forward.py          # 核心插件：群消息监听、关键词匹配、去重、转发、管理命令、提醒命令与调度
+  keyword_forward.py          # 核心插件：群消息监听、关键词匹配、去重、转发、管理命令
+  remind.py                   # 提醒插件：定时提醒的调度、触发、管理命令
 manage_keywords.py            # CLI 工具：管理 rules.json
 rules.json                    # 多群规则配置（热重载）
 reminders.json                # 提醒配置（启动时恢复调度）
@@ -28,14 +29,14 @@ keywords.json                 # 旧版关键词文件（仅迁移时使用）
 QQ 群消息 → NapCatQQ（Windows）→ 反向 WebSocket → NoneBot2（服务器）
 → keyword_forward.py 匹配关键词 → 命中后通过 NapCatQQ 私聊转发
 
-定时提醒 → APScheduler cron → _fire_reminder → NapCatQQ 私聊发送
+定时提醒 → APScheduler cron → remind.py _fire → NapCatQQ 私聊发送给创建者
 ```
 
 ### 关键设计细节
 
 - **去重**：基于内存 deque + set，30 秒 TTL，跟踪 `(group_id, message_id)` 对
 - **规则热重载**：每次群消息检查 `rules.json` 的 mtime，无需重启
-- **提醒调度**：`nonebot-plugin-apscheduler` 管理 cron 任务，启动时从 `reminders.json` 恢复
+- **提醒调度**：`plugins/remind.py` 管理 cron 任务（`nonebot-plugin-apscheduler`），启动时自动从 `reminders.json` 恢复，提醒发送给创建者而非全局 TARGET_QQS
 - **原子写入**：`rules.py` 和 `reminders.py` 使用临时文件 + `os.replace()` 写入，防止文件损坏
 
 ## 命令
@@ -112,8 +113,9 @@ pip install -r requirements.txt
       "hour": 10,
       "minute": 0,
       "message": "背单词",
-      "targets": [2731811629],
-      "enabled": true
+      "targets": [],
+      "enabled": true,
+      "creator_qq": 2731811629
     }
   ]
 }

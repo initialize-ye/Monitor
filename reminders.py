@@ -46,6 +46,7 @@ def normalize_reminder(reminder: dict) -> dict:
         "message": str(reminder["message"]).strip(),
         "targets": sorted({int(item) for item in reminder.get("targets", [])}),
         "enabled": bool(reminder.get("enabled", True)),
+        "creator_qq": int(reminder["creator_qq"]) if "creator_qq" in reminder else 0,
     }
 
 
