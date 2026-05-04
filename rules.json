@@ -1,0 +1,15 @@
+{
+  "rules": [
+    {
+      "group_id": 554817535,
+      "targets": [
+        2731811629
+      ],
+      "keywords": [
+        "裤子"
+      ],
+      "enabled": true,
+      "use_regex": false
+    }
+  ]
+}
