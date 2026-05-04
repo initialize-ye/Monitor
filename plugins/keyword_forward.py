@@ -223,6 +223,8 @@ def _build_admin_help() -> str:
         "remind once YYYY-MM-DD HH:MM …   单次提醒\n"
         "remind workday HH:MM <内容>       工作日提醒\n"
         "remind interval <分钟> <内容>     间隔提醒\n"
+        "remind period HH:MM <分钟> <内容> 周期催促提醒\n"
+        "remind done <编号>                标记周期催促今日完成\n"
         "remind remove <编号>              删除提醒\n"
         "remind list                       查看提醒\n"
         "\n"

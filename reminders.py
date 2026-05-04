@@ -42,7 +42,7 @@ def normalize_reminder(reminder: dict) -> dict:
     rem_type = reminder.get("type", "daily")
     normalized = {
         "id": int(reminder["id"]),
-        "type": rem_type if rem_type in ("daily", "once", "workday", "interval") else "daily",
+        "type": rem_type if rem_type in ("daily", "once", "workday", "interval", "period") else "daily",
         "message": str(reminder.get("message", "")).strip(),
         "targets": sorted({int(item) for item in reminder.get("targets", [])}),
         "enabled": bool(reminder.get("enabled", True)),
@@ -59,6 +59,11 @@ def normalize_reminder(reminder: dict) -> dict:
         normalized["fired"] = bool(reminder.get("fired", False))
     elif rem_type == "interval":
         normalized["interval_minutes"] = int(reminder.get("interval_minutes", 30))
+    elif rem_type == "period":
+        normalized["hour"] = int(reminder.get("hour", 9))
+        normalized["minute"] = int(reminder.get("minute", 0))
+        normalized["repeat_interval"] = int(reminder.get("repeat_interval", 30))
+        normalized["last_done_date"] = str(reminder.get("last_done_date", ""))
     return normalized
 
 
