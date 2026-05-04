@@ -51,22 +51,20 @@ def _build_keyboard(rows: list[list[dict]]) -> dict:
     return {
         "type": "keyboard",
         "data": {
-            "content": {
-                "rows": [
-                    [
-                        {
-                            "id": f"k_{i}_{j}",
-                            "label": btn["label"],
-                            "permission": {"type": 2},
-                            "reply": "",
-                            "enter": True,
+            "content": [
+                [
+                    {
+                        "text": btn["text"],
+                        "action": {
+                            "type": "input",
                             "data": btn["data"],
-                        }
-                        for j, btn in enumerate(row)
-                    ]
-                    for i, row in enumerate(rows)
+                            "enter": True,
+                        },
+                    }
+                    for btn in row
                 ]
-            }
+                for row in rows
+            ]
         }
     }
 
@@ -209,7 +207,7 @@ async def _fire(rem_id: int) -> None:
     if rem_type == "period":
         md = f"**周期催促提醒**\n{rem['message']}"
         kb = _build_keyboard([
-            [{"label": "今日完成", "data": f"remind done {rem_id}"}]
+            [{"text": "今日完成", "data": f"remind done {rem_id}"}]
         ])
         for target_qq in targets:
             try:
@@ -256,7 +254,7 @@ async def _fire_period_interval(rem_id: int) -> None:
     bot = bots[0]
     md = f"**周期催促提醒**\n{rem['message']}"
     kb = _build_keyboard([
-        [{"label": "今日完成", "data": f"remind done {rem_id}"}]
+        [{"text": "今日完成", "data": f"remind done {rem_id}"}]
     ])
 
     targets = rem.get("targets", [])
@@ -305,7 +303,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         text_list = "\n\n".join(_render_reminder(r) for r in reminders)
         period_reminders = [r for r in reminders if r.get("type") == "period"]
         if period_reminders:
-            buttons = [{"label": f"完成 #{r['id']}", "data": f"remind done {r['id']}"} for r in period_reminders[:4]]
+            buttons = [{"text": f"完成 #{r['id']}", "data": f"remind done {r['id']}"} for r in period_reminders[:4]]
             kb = _build_keyboard([buttons])
             await _reply_keyboard(bot, user_id, text_list, kb)
         else:

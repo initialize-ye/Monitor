@@ -210,22 +210,20 @@ def _build_keyboard(rows: list[list[dict]]) -> dict:
     return {
         "type": "keyboard",
         "data": {
-            "content": {
-                "rows": [
-                    [
-                        {
-                            "id": f"k_{i}_{j}",
-                            "label": btn["label"],
-                            "permission": {"type": 2},
-                            "reply": "",
-                            "enter": True,
+            "content": [
+                [
+                    {
+                        "text": btn["text"],
+                        "action": {
+                            "type": "input",
                             "data": btn["data"],
-                        }
-                        for j, btn in enumerate(row)
-                    ]
-                    for i, row in enumerate(rows)
+                            "enter": True,
+                        },
+                    }
+                    for btn in row
                 ]
-            }
+                for row in rows
+            ]
         }
     }
 
@@ -382,9 +380,9 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
 
     if command in {"help", "h"}:
         kb = _build_keyboard([
-            [{"label": "Status", "data": "status"}, {"label": "Stats", "data": "stats"}, {"label": "Quote", "data": "quote"}],
-            [{"label": "Add", "data": "add "}, {"label": "Remove", "data": "remove "}, {"label": "Disable", "data": "disable "}],
-            [{"label": "Remind List", "data": "remind list"}, {"label": "Remind Add", "data": "remind add "}],
+            [{"text": "Status", "data": "status"}, {"text": "Stats", "data": "stats"}, {"text": "Quote", "data": "quote"}],
+            [{"text": "Add", "data": "add "}, {"text": "Remove", "data": "remove "}, {"text": "Disable", "data": "disable "}],
+            [{"text": "Remind List", "data": "remind list"}, {"text": "Remind Add", "data": "remind add "}],
         ])
         await _reply_keyboard(bot, user_id, _build_admin_help(), kb)
         return
@@ -401,7 +399,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
                 return
             cmd_on = "on" if not rule["enabled"] else ""
             cmd_off = "off" if rule["enabled"] else ""
-            toggle_btn = [{"label": "启用", "data": f"on {group_id_arg}"}] if cmd_on else [{"label": "禁用", "data": f"off {group_id_arg}"}]
+            toggle_btn = [{"text": "启用", "data": f"on {group_id_arg}"}] if cmd_on else [{"text": "禁用", "data": f"off {group_id_arg}"}]
             kb = _build_keyboard([toggle_btn])
             await _reply_keyboard(bot, user_id, _render_rule(rule), kb)
         else:
