@@ -3,9 +3,6 @@
 import base64
 import io
 import os
-import textwrap
-from pathlib import Path
-from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
