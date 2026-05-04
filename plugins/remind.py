@@ -5,6 +5,7 @@ from nonebot import logger, get_driver
 from nonebot.adapters.onebot.v11 import Bot
 
 from reminders import load_reminders, save_reminders, normalize_reminder, next_reminder_id
+from image_renderer import render_text_to_image
 from quotes import random_quote
 
 TZ = os.getenv("TZ", "Asia/Shanghai")
@@ -46,11 +47,12 @@ async def _reply(bot: Bot, user_id: int, message: str) -> None:
     await bot.call_api("send_msg", message_type="private", user_id=user_id, message=message)
 
 
-async def _reply_markdown(bot: Bot, user_id: int, text: str) -> None:
-    """Send a markdown-formatted message, fall back to plain text if unsupported."""
+async def _reply_image(bot: Bot, user_id: int, text: str, title: str = "提醒") -> None:
+    """Render text to a styled image and send it, fall back to plain text on error."""
     try:
+        b64 = render_text_to_image(text, title=title)
         await bot.call_api("send_msg", message_type="private", user_id=user_id, message=[
-            {"type": "markdown", "data": {"content": text}},
+            {"type": "image", "data": {"file": b64}},
         ])
     except Exception:
         await _reply(bot, user_id, text)
@@ -178,19 +180,13 @@ async def _fire(rem_id: int) -> None:
     if not targets:
         targets = [rem["creator_qq"]] if rem.get("creator_qq") else []
 
-    # Period cron trigger: send with markdown formatting
+    # Period cron trigger: send as plain text
     if rem_type == "period":
-        md = f"**周期催促提醒**\n{rem['message']}"
         for target_qq in targets:
             try:
-                await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=[
-                    {"type": "markdown", "data": {"content": md}},
-                ])
-            except Exception:
-                try:
-                    await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=text)
-                except Exception as exc:
-                    logger.error("Failed to send period reminder %s to %s: %s", rem_id, target_qq, exc)
+                await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=text)
+            except Exception as exc:
+                logger.error("Failed to send period reminder %s to %s: %s", rem_id, target_qq, exc)
         logger.info("Fired period reminder %s: %s", rem_id, rem["message"])
         return
 
@@ -225,7 +221,7 @@ async def _fire_period_interval(rem_id: int) -> None:
         return
 
     bot = bots[0]
-    md = f"**周期催促提醒**\n{rem['message']}"
+    text = f"[周期催促提醒] {rem['message']}"
 
     targets = rem.get("targets", [])
     if not targets:
@@ -233,14 +229,9 @@ async def _fire_period_interval(rem_id: int) -> None:
 
     for target_qq in targets:
         try:
-            await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=[
-                {"type": "markdown", "data": {"content": md}},
-            ])
-        except Exception:
-            try:
-                await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=f"[周期催促提醒] {rem['message']}")
-            except Exception as exc:
-                logger.error("Failed to send period interval reminder %s to %s: %s", rem_id, target_qq, exc)
+            await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=text)
+        except Exception as exc:
+            logger.error("Failed to send period interval reminder %s to %s: %s", rem_id, target_qq, exc)
 
     logger.info("Period interval reminder %s: %s", rem_id, rem["message"])
 
@@ -272,7 +263,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
             await _reply(bot, user_id, "当前没有任何提醒")
             return
         text_list = "\n\n".join(_render_reminder(r) for r in reminders)
-        await _reply_markdown(bot, user_id, text_list)
+        await _reply_image(bot, user_id, text_list, title="提醒列表")
         return
 
     if sub == "add":

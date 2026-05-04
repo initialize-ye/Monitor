@@ -22,10 +22,13 @@ jobs:
             echo "=== 2. 拉取最新代码 ==="
             git pull
 
-            echo "=== 3. 安装/更新依赖 ==="
+            echo "=== 3. 安装中文字体 ==="
+            sudo apt-get install -y -qq fonts-wqy-microhei
+
+            echo "=== 4. 安装/更新依赖 ==="
             /home/ubuntu/Monitor/.venv/bin/pip install -r requirements.txt -q
 
-            echo "=== 4. 检查 .env ==="
+            echo "=== 5. 检查 .env ==="
             if [ ! -f .env ]; then
               echo "WARNING: .env 文件不存在，正在从 .env.example 复制"
               cp .env.example .env 2>/dev/null || echo "ERROR: 无 .env.example，请手动创建 .env"
@@ -33,15 +36,15 @@ jobs:
               echo ".env 存在"
             fi
 
-            echo "=== 5. 重启服务 ==="
+            echo "=== 6. 重启服务 ==="
             sudo systemctl daemon-reload
             sudo systemctl restart qq-forward-bot
 
-            echo "=== 6. 等待服务启动 ==="
+            echo "=== 7. 等待服务启动 ==="
             sleep 3
 
-            echo "=== 7. 检查服务状态 ==="
+            echo "=== 8. 检查服务状态 ==="
             sudo systemctl is-active qq-forward-bot --quiet && echo "✓ 服务运行中" || echo "✗ 服务未运行"
 
-            echo "=== 8. 最近 20 行日志 ==="
+            echo "=== 9. 最近 20 行日志 ==="
             sudo journalctl -u qq-forward-bot -n 20 --no-pager --output=short

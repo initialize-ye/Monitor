@@ -12,6 +12,7 @@ from nonebot.rule import is_type
 
 from rules import find_rule, load_rules, normalize_rule, save_rules, upsert_rule
 from .remind import handle_command as _handle_remind_command
+from image_renderer import render_text_to_image
 from quotes import random_quote
 
 
@@ -206,11 +207,12 @@ def _is_duplicate(message_key: str) -> bool:
 # --- helpers ---
 
 
-async def _reply_markdown(bot: Bot, user_id: int, text: str) -> None:
-    """Send a markdown-formatted message, fall back to plain text if unsupported."""
+async def _reply_image(bot: Bot, user_id: int, text: str, title: str = "Bot") -> None:
+    """Render text to a styled image and send it, fall back to plain text on error."""
     try:
+        b64 = render_text_to_image(text, title=title)
         await bot.call_api("send_msg", message_type="private", user_id=user_id, message=[
-            {"type": "markdown", "data": {"content": text}},
+            {"type": "image", "data": {"file": b64}},
         ])
     except Exception:
         await _reply_private(bot, user_id, text)
@@ -355,7 +357,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
     rules = _load_rules_from_file()
 
     if command in {"help", "h"}:
-        await _reply_markdown(bot, user_id, _build_admin_help())
+        await _reply_image(bot, user_id, _build_admin_help(), title="帮助")
         return
 
     if command == "status":
@@ -368,7 +370,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             if not rule:
                 await _reply_private(bot, user_id, f"群 {group_id_arg} 不存在")
                 return
-            await _reply_markdown(bot, user_id, _render_rule(rule))
+            await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {rule['group_id']}")
         else:
             await _reply_private(bot, user_id, "\n\n".join(_render_rule(r) for r in rules))
         return
