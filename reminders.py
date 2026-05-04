@@ -43,10 +43,11 @@ def normalize_reminder(reminder: dict) -> dict:
     normalized = {
         "id": int(reminder["id"]),
         "type": rem_type if rem_type in ("daily", "once", "workday", "interval") else "daily",
-        "message": str(reminder["message"]).strip(),
+        "message": str(reminder.get("message", "")).strip(),
         "targets": sorted({int(item) for item in reminder.get("targets", [])}),
         "enabled": bool(reminder.get("enabled", True)),
         "creator_qq": int(reminder["creator_qq"]) if "creator_qq" in reminder else 0,
+        "auto_generate": reminder.get("auto_generate", ""),
     }
     if rem_type in ("daily", "workday"):
         normalized["hour"] = int(reminder.get("hour", 9))

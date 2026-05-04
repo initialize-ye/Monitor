@@ -12,6 +12,7 @@ from nonebot.rule import is_type
 
 from rules import find_rule, load_rules, normalize_rule, save_rules, upsert_rule
 from .remind import handle_command as _handle_remind_command
+from quotes import random_quote
 
 
 def _parse_int_set(raw: str) -> set[int]:
@@ -214,6 +215,7 @@ def _build_admin_help() -> str:
         "disable <编号>     临时禁用关键词\n"
         "enable <编号>      恢复禁用关键词\n"
         "stats              今日命中统计\n"
+        "quote              随机励志名言\n"
         "on / off           启用/禁用监听\n"
         "\n"
         "— 定时提醒 —\n"
@@ -443,6 +445,10 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         await _reply_private(bot, user_id, "\n".join(lines))
         return
 
+    if command == "quote":
+        await _reply_private(bot, user_id, f"[每日一言] {random_quote()}")
+        return
+
     if command in {"disable", "enable"}:
         parts = text.split(maxsplit=2)
         if len(parts) < 2 or not parts[1].strip().isdigit():
@@ -565,7 +571,7 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
 
 # --- main dispatch ---
 
-COMMANDS = {"status", "add", "remove", "set", "on", "off", "disable", "enable", "stats", "help", "h", "rule", "remind"}
+COMMANDS = {"status", "add", "remove", "set", "on", "off", "disable", "enable", "stats", "quote", "help", "h", "rule", "remind"}
 
 
 @admin_matcher.handle()

@@ -5,6 +5,7 @@ from nonebot import logger, get_driver
 from nonebot.adapters.onebot.v11 import Bot
 
 from reminders import load_reminders, save_reminders, normalize_reminder, next_reminder_id
+from quotes import random_quote
 
 TZ = os.getenv("TZ", "Asia/Shanghai")
 driver = get_driver()
@@ -29,7 +30,10 @@ def _render_reminder(rem: dict) -> str:
         lines.append(f"间隔: 每{rem['interval_minutes']}分钟")
     else:
         lines.append(f"时间: {rem['hour']:02d}:{rem['minute']:02d} {REMIND_TYPE_LABELS.get(rem_type, '')}")
-    lines.append(f"内容: {rem['message']}")
+    if rem.get("auto_generate") == "quote":
+        lines.append("内容: [每日一言] 每次触发随机生成")
+    else:
+        lines.append(f"内容: {rem['message']}")
     return "\n".join(lines)
 
 
@@ -115,10 +119,15 @@ async def _fire(rem_id: int) -> None:
 
     bot = bots[0]
     rem_type = rem.get("type", "daily")
-    label = REMIND_TYPE_LABELS.get(rem_type, "")
-    text = f"[提醒] {rem['message']}"
-    if label:
-        text = f"[{label}提醒] {rem['message']}"
+    auto = rem.get("auto_generate", "")
+
+    if auto == "quote":
+        text = f"[每日一言] {random_quote()}"
+    else:
+        label = REMIND_TYPE_LABELS.get(rem_type, "")
+        text = f"[提醒] {rem['message']}"
+        if label:
+            text = f"[{label}提醒] {rem['message']}"
 
     targets = rem.get("targets", [])
     if not targets:
@@ -164,6 +173,16 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
 
     if sub == "add":
         await _add_daily(bot, user_id, parts)
+        return
+
+    if sub == "quote":
+        if len(parts) < 3 or not parts[2].strip():
+            await _reply(bot, user_id, "用法: remind quote <HH:MM>\n例如: remind quote 09:00")
+            return
+        if len(parts) > 3 and parts[3].strip():
+            await _reply(bot, user_id, "用法: remind quote <HH:MM>\n每日一言不需要输入内容，每次自动随机生成")
+            return
+        await _add_quote(bot, user_id, parts)
         return
 
     if sub == "once":
@@ -293,12 +312,13 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
     await _reply(
         bot, user_id,
         "用法:\n"
-        "remind add HH:MM <内容>         — 每天提醒\n"
-        "remind once YYYY-MM-DD HH:MM … — 单次提醒\n"
-        "remind workday HH:MM <内容>     — 工作日提醒\n"
-        "remind interval <分钟> <内容>   — 间隔提醒\n"
-        "remind remove <编号>             — 删除提醒\n"
-        "remind list                      — 查看提醒"
+        "remind add HH:MM <内容>            — 每天提醒\n"
+        "remind once YYYY-MM-DD HH:MM …    — 单次提醒\n"
+        "remind workday HH:MM <内容>        — 工作日提醒\n"
+        "remind interval <分钟> <内容>      — 间隔提醒\n"
+        "remind quote HH:MM                 — 每日一言(随机名言)\n"
+        "remind remove <编号>               — 删除提醒\n"
+        "remind list                        — 查看提醒"
     )
 
 
@@ -345,6 +365,43 @@ async def _add_timed(bot: Bot, user_id: int, parts: list[str], rem_type: str) ->
 
     _schedule(new_rem)
     await _reply(bot, user_id, f"已添加提醒\n{_render_reminder(new_rem)}")
+
+
+async def _add_quote(bot: Bot, user_id: int, parts: list[str]) -> None:
+    time_str = parts[2].strip()
+    match = re.match(r"^(\d{1,2}):(\d{2})$", time_str)
+    if not match:
+        await _reply(bot, user_id, "时间格式错误，请使用 HH:MM（例如 09:00、08:30）")
+        return
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        await _reply(bot, user_id, "时间范围错误：小时 0-23，分钟 0-59")
+        return
+
+    try:
+        reminders = load_reminders()
+    except (RuntimeError, ValueError):
+        reminders = []
+
+    new_rem = normalize_reminder({
+        "id": next_reminder_id(reminders),
+        "type": "daily",
+        "hour": hour,
+        "minute": minute,
+        "targets": [],
+        "enabled": True,
+        "creator_qq": user_id,
+        "auto_generate": "quote",
+    })
+    reminders.append(new_rem)
+    try:
+        save_reminders(reminders)
+    except OSError as exc:
+        await _reply(bot, user_id, f"保存失败: {exc}")
+        return
+
+    _schedule(new_rem)
+    await _reply(bot, user_id, f"已添加每日一言\n{_render_reminder(new_rem)}")
 
 
 @driver.on_startup
