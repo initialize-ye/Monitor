@@ -372,7 +372,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
                 return
             await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {rule['group_id']}")
         else:
-            await _reply_private(bot, user_id, "\n\n".join(_render_rule(r) for r in rules))
+            await _reply_image(bot, user_id, "\n\n".join(_render_rule(r) for r in rules), title="规则列表")
         return
 
     if command in {"on", "off"}:
@@ -387,7 +387,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             return
         rule["enabled"] = command == "on"
         _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
+        await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {rule['group_id']}")
         return
 
     if command == "remove":
@@ -415,7 +415,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         if 1 <= idx <= len(rule["keywords"]):
             removed = rule["keywords"].pop(idx - 1)
             _save_rules_file(upsert_rule(rules, rule))
-            await _reply_private(bot, user_id, f"已删除关键词 [{idx}] {removed['word']}\n{_render_rule(rule)}")
+            await _reply_image(bot, user_id, f"已删除关键词 [{idx}] {removed['word']}\n{_render_rule(rule)}", title=f"群 {group_id}")
         else:
             await _reply_private(bot, user_id, f"编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
         return
@@ -445,7 +445,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             ]
             _save_rules_file(upsert_rule(rules, rule))
 
-        await _reply_private(bot, user_id, _render_rule(rule))
+        await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {group_id}")
         return
 
     if command == "stats":
@@ -490,16 +490,16 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             rule["keywords"][idx - 1]["enabled"] = command == "enable"
             _save_rules_file(upsert_rule(rules, rule))
             status = "已启用" if command == "enable" else "已禁用"
-            await _reply_private(bot, user_id, f"{status}关键词 [{idx}] {rule['keywords'][idx - 1]['word']}\n{_render_rule(rule)}")
+            await _reply_image(bot, user_id, f"{status}关键词 [{idx}] {rule['keywords'][idx - 1]['word']}\n{_render_rule(rule)}", title=f"群 {group_id}")
         else:
             await _reply_private(bot, user_id, f"编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
         return
 
-    await _reply_private(bot, user_id, _build_admin_help())
+    await _reply_image(bot, user_id, _build_admin_help(), title="帮助")
 
 async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> None:
     if len(parts) < 2:
-        await _reply_private(bot, user_id, _build_admin_help())
+        await _reply_image(bot, user_id, _build_admin_help(), title="帮助")
         return
 
     sub = parts[1].lower()
@@ -525,7 +525,7 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
             "use_regex": USE_REGEX,
         }
         _save_rules_file(upsert_rule(rules, new_rule))
-        await _reply_private(bot, user_id, f"已添加群规则\n{_render_rule(new_rule)}")
+        await _reply_image(bot, user_id, f"已添加群规则\n{_render_rule(new_rule)}", title=f"群 {group_id}")
 
     elif sub == "delgroup":
         if len(parts) < 3:
@@ -558,7 +558,7 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
         targets.add(target)
         rule["targets"] = sorted(targets)
         _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
+        await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {group_id}")
 
     elif sub == "deltarget":
         if len(parts) < 4:
@@ -578,10 +578,10 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
         targets.discard(target)
         rule["targets"] = sorted(targets)
         _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
+        await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {group_id}")
 
     else:
-        await _reply_private(bot, user_id, _build_admin_help())
+        await _reply_image(bot, user_id, _build_admin_help(), title="帮助")
 
 
 # --- main dispatch ---

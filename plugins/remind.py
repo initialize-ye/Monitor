@@ -323,7 +323,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
             await _reply(bot, user_id, f"保存失败: {exc}")
             return
         _schedule(new_rem)
-        await _reply(bot, user_id, f"已添加单次提醒\n{_render_reminder(new_rem)}")
+        await _reply_image(bot, user_id, f"已添加单次提醒\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
         return
 
     if sub == "workday":
@@ -369,7 +369,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
             await _reply(bot, user_id, f"保存失败: {exc}")
             return
         _schedule(new_rem)
-        await _reply(bot, user_id, f"已添加间隔提醒\n{_render_reminder(new_rem)}")
+        await _reply_image(bot, user_id, f"已添加间隔提醒\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
         return
 
     if sub == "period":
@@ -449,7 +449,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         await _reply(bot, user_id, f"已删除提醒 {rem_id}")
         return
 
-    await _reply(
+    await _reply_image(
         bot, user_id,
         "用法:\n"
         "remind add HH:MM <内容>                          — 每天提醒\n"
@@ -460,7 +460,8 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         "remind done <编号>                               — 标记周期催促今日完成\n"
         "remind quote HH:MM                               — 每日一言(随机名言)\n"
         "remind remove <编号>                              — 删除提醒\n"
-        "remind list                                       — 查看提醒"
+        "remind list                                       — 查看提醒",
+        title="提醒命令",
     )
 
 
@@ -506,7 +507,7 @@ async def _add_timed(bot: Bot, user_id: int, parts: list[str], rem_type: str) ->
         return
 
     _schedule(new_rem)
-    await _reply(bot, user_id, f"已添加提醒\n{_render_reminder(new_rem)}")
+    await _reply_image(bot, user_id, f"已添加提醒\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
 
 
 async def _add_quote(bot: Bot, user_id: int, parts: list[str]) -> None:
@@ -543,7 +544,7 @@ async def _add_quote(bot: Bot, user_id: int, parts: list[str]) -> None:
         return
 
     _schedule(new_rem)
-    await _reply(bot, user_id, f"已添加每日一言\n{_render_reminder(new_rem)}")
+    await _reply_image(bot, user_id, f"已添加每日一言\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
 
 
 async def _add_period(bot: Bot, user_id: int, parts: list[str]) -> None:
@@ -591,7 +592,7 @@ async def _add_period(bot: Bot, user_id: int, parts: list[str]) -> None:
         return
 
     _schedule(new_rem)
-    await _reply(bot, user_id, f"已添加周期催促提醒\n{_render_reminder(new_rem)}")
+    await _reply_image(bot, user_id, f"已添加周期催促提醒\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
 
 
 @driver.on_startup
