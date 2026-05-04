@@ -24,22 +24,23 @@ REMIND_TYPE_LABELS = {
 
 
 def _render_reminder(rem: dict) -> str:
-    lines = [f"编号: {rem['id']}"]
+    lines = [f"📋 编号: {rem['id']}"]
     rem_type = rem.get("type", "daily")
     if rem_type == "once":
-        lines.append(f"时间: {rem.get('date', '')} {rem['hour']:02d}:{rem['minute']:02d}")
+        label = f"{rem.get('date', '')} {rem['hour']:02d}:{rem['minute']:02d}"
     elif rem_type == "interval":
-        lines.append(f"间隔: 每{rem['interval_minutes']}分钟")
+        label = f"每{rem['interval_minutes']}分钟"
     elif rem_type == "period":
-        lines.append(f"时间: {rem['hour']:02d}:{rem['minute']:02d} 每{rem['repeat_interval']}分钟催促 每天")
+        label = f"{rem['hour']:02d}:{rem['minute']:02d} 每{rem['repeat_interval']}分钟 · 每天"
     else:
-        lines.append(f"时间: {rem['hour']:02d}:{rem['minute']:02d} {REMIND_TYPE_LABELS.get(rem_type, '')}")
+        label = f"{rem['hour']:02d}:{rem['minute']:02d} {REMIND_TYPE_LABELS.get(rem_type, '')}"
+    lines.append(f"⏰ {label}")
     if rem.get("auto_generate") == "quote":
-        lines.append("内容: [每日一言] 每次触发随机生成")
+        lines.append("📝 [每日一言] 每次触发随机生成")
     else:
-        lines.append(f"内容: {rem['message']}")
+        lines.append(f"📝 {rem['message']}")
     if rem_type == "period" and rem.get("last_done_date") == date.today().isoformat():
-        lines.append("状态: 今日已完成")
+        lines.append("✅ 状态: 今日已完成")
     return "\n".join(lines)
 
 
@@ -169,12 +170,12 @@ async def _fire(rem_id: int) -> None:
     auto = rem.get("auto_generate", "")
 
     if auto == "quote":
-        text = f"[每日一言] {await random_quote()}"
+        text = f"📖 {await random_quote()}"
     else:
         label = REMIND_TYPE_LABELS.get(rem_type, "")
-        text = f"[提醒] {rem['message']}"
+        text = f"⏰ {rem['message']}"
         if label:
-            text = f"[{label}提醒] {rem['message']}"
+            text = f"⏰ [{label}] {rem['message']}"
 
     targets = rem.get("targets", [])
     if not targets:
@@ -221,7 +222,7 @@ async def _fire_period_interval(rem_id: int) -> None:
         return
 
     bot = bots[0]
-    text = f"[周期催促提醒] {rem['message']}"
+    text = f"🔔 [周期催促] {rem['message']}"
 
     targets = rem.get("targets", [])
     if not targets:
@@ -401,7 +402,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
             await _reply(bot, user_id, f"编号 {rem_id} 不存在")
             return
         if target.get("type") != "period":
-            await _reply(bot, user_id, "该提醒不是周期催促类型")
+            await _reply(bot, user_id, "⚠️ 该提醒不是周期催促类型")
             return
 
         today = date.today().isoformat()
@@ -409,11 +410,11 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         try:
             save_reminders(reminders)
         except OSError as exc:
-            await _reply(bot, user_id, f"保存失败: {exc}")
+            await _reply(bot, user_id, f"❌ 保存失败: {exc}")
             return
 
         _unschedule_period_interval(rem_id)
-        await _reply(bot, user_id, f"已标记提醒 {rem_id} 今日完成，明天继续")
+        await _reply(bot, user_id, f"✅ 已标记提醒 {rem_id} 今日完成，明天继续")
         return
 
     if sub in {"remove", "del", "delete"}:
@@ -446,7 +447,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
 
         _unschedule(rem_id)
         _unschedule_period_interval(rem_id)
-        await _reply(bot, user_id, f"已删除提醒 {rem_id}")
+        await _reply(bot, user_id, f"🗑️ 已删除提醒 {rem_id}")
         return
 
     await _reply_image(

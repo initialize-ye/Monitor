@@ -258,10 +258,11 @@ def _render_rule(rule: dict) -> str:
     ) if rule["keywords"] else "无"
     return (
         f"群号: {rule['group_id']}\n"
-        f"状态: {'启用' if rule['enabled'] else '禁用'}\n"
-        f"目标QQ: {', '.join(map(str, rule['targets'])) or '无'}\n"
-        f"关键词:\n{kw_lines}\n"
-        f"正则: {'是' if rule['use_regex'] else '否'}"
+        f"状态: {'✅ 启用' if rule['enabled'] else '⛔ 禁用'}\n"
+        f"目标: {', '.join(map(str, rule['targets'])) or '无'}\n"
+        f"正则: {'是' if rule['use_regex'] else '否'}\n"
+        f"─ 关键词 ─\n"
+        f"{kw_lines}"
     )
 
 
@@ -337,13 +338,15 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
     extra = " ".join(extra_parts)
 
     forward_text = (
-        f"[关键词] {msg_time}\n"
-        f"{sender_name} ({event.user_id})\n"
-        f"命中: {', '.join(matched)}\n"
+        f"🔍 关键词命中 · {msg_time}\n"
+        f"─────────────────────\n"
+        f"👤 {sender_name} ({event.user_id})\n"
+        f"🎯 命中: {', '.join(matched)}\n"
+        f"─────────────────────\n"
         f"{text}"
     )
     if extra:
-        forward_text += f"\n{extra}"
+        forward_text += f"\n📎 {extra}"
 
     for target_qq in rule["targets"]:
         await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=forward_text)
@@ -455,13 +458,13 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             await _reply_private(bot, user_id, "今日暂无命中统计")
             return
         today_hits.sort(key=lambda x: -x[1])
-        lines = [f"今日关键词统计 ({today})", ""]
-        lines.extend(f"  {word}: {count}次" for word, count in today_hits)
+        lines = [f"📊 今日关键词统计 · {today}", ""]
+        lines.extend(f"  ▸ {word}  {count}次" for word, count in today_hits)
         await _reply_private(bot, user_id, "\n".join(lines))
         return
 
     if command == "quote":
-        await _reply_private(bot, user_id, f"[每日一言] {await random_quote()}")
+        await _reply_private(bot, user_id, f"📖 {await random_quote()}")
         return
 
     if command in {"disable", "enable"}:
