@@ -171,41 +171,20 @@ def _is_duplicate(message_key: str) -> bool:
 
 
 def _build_admin_help() -> str:
-    rules = _load_rules_from_file()
-    single = len(rules) == 1
-
-    if single:
-        return (
-            "简化命令（单群模式）:\n"
-            "status         — 查看当前规则\n"
-            "add <关键词>    — 添加关键词\n"
-            "remove <关键词> — 删除关键词\n"
-            "set <词1,词2>   — 替换全部关键词\n"
-            "on              — 启用监听\n"
-            "off             — 禁用监听\n"
-            "help            — 显示帮助\n\n"
-            "完整命令（多群模式）:\n"
-            "rule list / addgroup <群号> / delgroup <群号>\n"
-            "rule addtarget <群号> <QQ号> / deltarget <群号> <QQ号>\n"
-            "rule enable <群号> / disable <群号>\n"
-            "kw list <群号> / kw add <群号> <关键词>\n"
-            "kw remove <群号> <关键词> / kw set <群号> <词1,词2>"
-        )
-
     return (
-        "管理命令:\n"
-        "rule list\n"
+        "命令:\n"
+        "status [群号]      — 查看规则（单群无需群号）\n"
+        "add [群号] <关键词>  — 添加关键词\n"
+        "remove [群号] <关键词> — 删除关键词\n"
+        "set [群号] <词1,词2> — 替换全部关键词\n"
+        "on [群号]           — 启用监听\n"
+        "off [群号]          — 禁用监听\n"
+        "help               — 显示帮助\n\n"
+        "高级命令:\n"
         "rule addgroup <群号>\n"
         "rule delgroup <群号>\n"
         "rule addtarget <群号> <QQ号>\n"
-        "rule deltarget <群号> <QQ号>\n"
-        "rule enable <群号>\n"
-        "rule disable <群号>\n"
-        "kw list <群号>\n"
-        "kw add <群号> <关键词>\n"
-        "kw remove <群号> <关键词>\n"
-        "kw set <群号> <词1,词2,...>\n"
-        "rule help"
+        "rule deltarget <群号> <QQ号>"
     )
 
 
@@ -259,79 +238,85 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
     logger.info("Forwarded group message %s from %s to %s", event.message_id, event.group_id, rule["targets"])
 
 
-async def _handle_rule_command(bot: Bot, user_id: int, parts: list[str]) -> None:
-    command = parts[1].lower() if len(parts) > 1 else "help"
+def _resolve_group_id(text: str) -> tuple[int | None, str | None, str]:
+    """Parse command text, auto-detect whether first arg is a group_id (pure digits).
+
+    Returns (group_id_or_None, keyword_or_None, remaining_text).
+    Single-group: group_id is None (auto-resolved later).
+    Multi-group: group_id is the parsed int.
+    """
+    parts = text.split(maxsplit=2)
+    if len(parts) < 2:
+        return (None, None, "")
+
+    first = parts[1]
+    # If the second token is a pure number, treat it as group_id
+    if first.isdigit():
+        group_id = int(first)
+        keyword = parts[2].strip() if len(parts) > 2 else None
+        return (group_id, keyword, parts[2] if len(parts) > 2 else "")
+
+    # Otherwise it's a keyword (single-group mode)
+    keyword = first.strip()
+    remaining = f"{first} {parts[2]}" if len(parts) > 2 else first
+    return (None, keyword, remaining)
+
+
+async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> None:
     rules = _load_rules_from_file()
 
     if command in {"help", "h"}:
         await _reply_private(bot, user_id, _build_admin_help())
         return
 
-    if command == "list":
+    if command == "status":
         if not rules:
             await _reply_private(bot, user_id, "当前没有任何群规则")
             return
-        await _reply_private(bot, user_id, "\n\n".join(_render_rule(rule) for rule in rules))
-        return
-
-    if len(parts) < 3:
-        await _reply_private(bot, user_id, _build_admin_help())
-        return
-
-    try:
-        group_id = int(parts[2].strip())
-    except ValueError:
-        await _reply_private(bot, user_id, f"无效的群号: {parts[2]}")
-        return
-
-    rule = find_rule(rules, group_id)
-
-    if command == "addgroup":
-        if rule:
-            await _reply_private(bot, user_id, f"群 {group_id} 已存在")
-            return
-        new_rule = {
-            "group_id": group_id,
-            "targets": sorted(TARGET_QQS),
-            "keywords": [],
-            "enabled": True,
-            "use_regex": USE_REGEX,
-        }
-        _save_rules_file(upsert_rule(rules, new_rule))
-        await _reply_private(bot, user_id, f"已添加群规则\n{_render_rule(new_rule)}")
-        return
-
-    if not rule:
-        await _reply_private(bot, user_id, f"群 {group_id} 不存在")
-        return
-
-    if command == "delgroup":
-        updated = [item for item in rules if item["group_id"] != group_id]
-        _save_rules_file(updated)
-        await _reply_private(bot, user_id, f"已删除群规则 {group_id}")
-        return
-
-    if command in {"enable", "disable"}:
-        rule["enabled"] = command == "enable"
-        _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
-
-    if command in {"addtarget", "deltarget"}:
-        if len(parts) < 4:
-            await _reply_private(bot, user_id, f"用法: rule {command} <群号> <QQ号>")
-            return
-        try:
-            target = int(parts[3].strip())
-        except ValueError:
-            await _reply_private(bot, user_id, f"无效的 QQ 号: {parts[3]}")
-            return
-        targets = set(rule["targets"])
-        if command == "addtarget":
-            targets.add(target)
+        group_id_arg, _, _ = _resolve_group_id(text)
+        if group_id_arg is not None:
+            rule = find_rule(rules, group_id_arg)
+            if not rule:
+                await _reply_private(bot, user_id, f"群 {group_id_arg} 不存在")
+                return
+            await _reply_private(bot, user_id, _render_rule(rule))
         else:
-            targets.discard(target)
-        rule["targets"] = sorted(targets)
+            await _reply_private(bot, user_id, "\n\n".join(_render_rule(r) for r in rules))
+        return
+
+    if command in {"on", "off"}:
+        group_id_arg, _, _ = _resolve_group_id(text)
+        if group_id_arg is None and len(rules) != 1:
+            await _reply_private(bot, user_id, "存在多个群规则，请指定群号: on <群号>")
+            return
+        group_id = group_id_arg if group_id_arg is not None else rules[0]["group_id"]
+        rule = find_rule(rules, group_id)
+        if not rule:
+            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            return
+        rule["enabled"] = command == "on"
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if command in {"add", "remove", "set"}:
+        group_id_arg, keyword, _ = _resolve_group_id(text)
+        if not keyword:
+            await _reply_private(bot, user_id, f"用法: {command} [群号] <关键词>")
+            return
+        if group_id_arg is None and len(rules) != 1:
+            await _reply_private(bot, user_id, f"存在多个群规则，请指定群号: {command} <群号> <关键词>")
+            return
+        group_id = group_id_arg if group_id_arg is not None else rules[0]["group_id"]
+
+        if command == "add":
+            if keyword not in rule["keywords"]:
+                rule["keywords"].append(keyword)
+        elif command == "remove":
+            rule["keywords"] = [item for item in rule["keywords"] if item != keyword]
+        else:
+            rule["keywords"] = [item.strip() for item in keyword.replace("，", ",").split(",") if item.strip()]
+
         _save_rules_file(upsert_rule(rules, rule))
         await _reply_private(bot, user_id, _render_rule(rule))
         return
@@ -339,124 +324,7 @@ async def _handle_rule_command(bot: Bot, user_id: int, parts: list[str]) -> None
     await _reply_private(bot, user_id, _build_admin_help())
 
 
-async def _handle_kw_command(bot: Bot, user_id: int, parts: list[str]) -> None:
-    command = parts[1].lower() if len(parts) > 1 else "list"
-    rules = _load_rules_from_file()
-
-    if command in {"help", "h"}:
-        await _reply_private(bot, user_id, _build_admin_help())
-        return
-
-    if len(parts) < 3:
-        await _reply_private(bot, user_id, "用法: kw list <群号> / kw add <群号> <关键词>")
-        return
-
-    try:
-        group_id = int(parts[2].strip())
-    except ValueError:
-        await _reply_private(bot, user_id, f"无效的群号: {parts[2]}")
-        return
-
-    rule = find_rule(rules, group_id)
-    if not rule:
-        await _reply_private(bot, user_id, f"群 {group_id} 不存在，请先执行 rule addgroup {group_id}")
-        return
-
-    if command == "list":
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
-
-    if len(parts) < 4 or not parts[3].strip():
-        await _reply_private(bot, user_id, f"用法: kw {command} <群号> <关键词>")
-        return
-
-    if command == "add":
-        keyword = parts[3].strip()
-        if keyword not in rule["keywords"]:
-            rule["keywords"].append(keyword)
-        _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
-
-    if command == "remove":
-        keyword = parts[3].strip()
-        rule["keywords"] = [item for item in rule["keywords"] if item != keyword]
-        _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
-
-    if command == "set":
-        keywords = [item.strip() for item in parts[3].replace("，", ",").split(",") if item.strip()]
-        rule["keywords"] = keywords
-        _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
-
-    await _reply_private(bot, user_id, _build_admin_help())
-
-
-SIMPLE_COMMANDS = {"status", "add", "remove", "set", "on", "off", "help"}
-
-
-async def _handle_simple_command(bot: Bot, user_id: int, text: str) -> None:
-    parts = text.split(maxsplit=2)
-    command = parts[0].lower()
-
-    if command == "help":
-        await _reply_private(bot, user_id, _build_admin_help())
-        return
-
-    rules = _load_rules_from_file()
-    if len(rules) != 1:
-        await _reply_private(bot, user_id, "存在多个群规则，请使用完整命令（输入 help 查看）")
-        return
-
-    group_id = rules[0]["group_id"]
-
-    if command == "status":
-        await _reply_private(bot, user_id, _render_rule(rules[0]))
-        return
-
-    if command == "on":
-        rule = find_rule(rules, group_id)
-        rule["enabled"] = True
-        _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
-
-    if command == "off":
-        rule = find_rule(rules, group_id)
-        rule["enabled"] = False
-        _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
-
-    if len(parts) < 2 or not parts[1].strip():
-        await _reply_private(bot, user_id, f"用法: {command} <关键词>")
-        return
-
-    keyword = parts[1].strip()
-    rule = find_rule(rules, group_id)
-
-    if command == "add":
-        if keyword not in rule["keywords"]:
-            rule["keywords"].append(keyword)
-        _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
-
-    if command == "remove":
-        rule["keywords"] = [item for item in rule["keywords"] if item != keyword]
-        _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
-
-    if command == "set":
-        keywords = [item.strip() for item in keyword.replace("，", ",").split(",") if item.strip()]
-        rule["keywords"] = keywords
-        _save_rules_file(upsert_rule(rules, rule))
-        await _reply_private(bot, user_id, _render_rule(rule))
-        return
+COMMANDS = {"status", "add", "remove", "set", "on", "off", "help", "h", "rule"}
 
 
 @admin_matcher.handle()
@@ -468,24 +336,103 @@ async def handle_admin_command(bot: Bot, event: PrivateMessageEvent) -> None:
     if not text:
         raise FinishedException
 
-    lower = text.lower()
-    first_word = lower.split(maxsplit=1)[0]
+    first_word = text.split(maxsplit=1)[0].lower()
 
-    if first_word in SIMPLE_COMMANDS:
-        await _handle_simple_command(bot, event.user_id, text)
+    if first_word not in COMMANDS:
         raise FinishedException
 
-    if not (first_word == "kw" or first_word == "rule"):
+    # Advanced: rule addgroup/delgroup/addtarget/deltarget
+    if first_word == "rule":
+        await _handle_rule_advanced(bot, event.user_id, text.split(maxsplit=3))
         raise FinishedException
 
-    parts = text.split(maxsplit=3)
-
-    namespace = parts[0].lower()
-    if namespace == "rule":
-        await _handle_rule_command(bot, event.user_id, parts)
-    elif namespace == "kw":
-        await _handle_kw_command(bot, event.user_id, parts)
-    else:
-        await _reply_private(bot, event.user_id, _build_admin_help())
-
+    # Unified: status/add/remove/set/on/off/help
+    await _handle_command(bot, event.user_id, first_word, text)
     raise FinishedException
+
+
+async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> None:
+    if len(parts) < 2:
+        await _reply_private(bot, user_id, _build_admin_help())
+        return
+
+    sub = parts[1].lower()
+    rules = _load_rules_from_file()
+
+    if sub == "addgroup":
+        if len(parts) < 3:
+            await _reply_private(bot, user_id, "用法: rule addgroup <群号>")
+            return
+        try:
+            group_id = int(parts[2].strip())
+        except ValueError:
+            await _reply_private(bot, user_id, f"无效的群号: {parts[2]}")
+            return
+        if find_rule(rules, group_id):
+            await _reply_private(bot, user_id, f"群 {group_id} 已存在")
+            return
+        new_rule = {
+            "group_id": group_id,
+            "targets": sorted(TARGET_QQS),
+            "keywords": [],
+            "enabled": True,
+            "use_regex": USE_REGEX,
+        }
+        _save_rules_file(upsert_rule(rules, new_rule))
+        await _reply_private(bot, user_id, f"已添加群规则\n{_render_rule(new_rule)}")
+
+    elif sub == "delgroup":
+        if len(parts) < 3:
+            await _reply_private(bot, user_id, "用法: rule delgroup <群号>")
+            return
+        try:
+            group_id = int(parts[2].strip())
+        except ValueError:
+            await _reply_private(bot, user_id, f"无效的群号: {parts[2]}")
+            return
+        updated = [item for item in rules if item["group_id"] != group_id]
+        _save_rules_file(updated)
+        await _reply_private(bot, user_id, f"已删除群规则 {group_id}")
+
+    elif sub == "addtarget":
+        if len(parts) < 4:
+            await _reply_private(bot, user_id, "用法: rule addtarget <群号> <QQ号>")
+            return
+        try:
+            group_id = int(parts[2].strip())
+            target = int(parts[3].strip())
+        except ValueError:
+            await _reply_private(bot, user_id, "无效的群号或QQ号")
+            return
+        rule = find_rule(rules, group_id)
+        if not rule:
+            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            return
+        targets = set(rule["targets"])
+        targets.add(target)
+        rule["targets"] = sorted(targets)
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+
+    elif sub == "deltarget":
+        if len(parts) < 4:
+            await _reply_private(bot, user_id, "用法: rule deltarget <群号> <QQ号>")
+            return
+        try:
+            group_id = int(parts[2].strip())
+            target = int(parts[3].strip())
+        except ValueError:
+            await _reply_private(bot, user_id, "无效的群号或QQ号")
+            return
+        rule = find_rule(rules, group_id)
+        if not rule:
+            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            return
+        targets = set(rule["targets"])
+        targets.discard(target)
+        rule["targets"] = sorted(targets)
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+
+    else:
+        await _reply_private(bot, user_id, _build_admin_help())
