@@ -46,39 +46,14 @@ async def _reply(bot: Bot, user_id: int, message: str) -> None:
     await bot.call_api("send_msg", message_type="private", user_id=user_id, message=message)
 
 
-def _build_keyboard(rows: list[list[dict]]) -> dict:
-    """Build a NapCatQQ keyboard segment with button rows."""
-    return {
-        "type": "keyboard",
-        "data": {
-            "content": [
-                [
-                    {
-                        "text": btn["text"],
-                        "action": {
-                            "type": "input",
-                            "data": btn["data"],
-                            "enter": True,
-                        },
-                    }
-                    for btn in row
-                ]
-                for row in rows
-            ]
-        }
-    }
-
-
-async def _reply_keyboard(bot: Bot, user_id: int, markdown: str, keyboard: dict | None = None) -> None:
-    """Send a markdown message with optional keyboard buttons."""
-    msg: list[dict] = [{"type": "markdown", "data": {"content": markdown}}]
-    if keyboard:
-        msg.append(keyboard)
+async def _reply_markdown(bot: Bot, user_id: int, text: str) -> None:
+    """Send a markdown-formatted message, fall back to plain text if unsupported."""
     try:
-        await bot.call_api("send_msg", message_type="private", user_id=user_id, message=msg)
+        await bot.call_api("send_msg", message_type="private", user_id=user_id, message=[
+            {"type": "markdown", "data": {"content": text}},
+        ])
     except Exception:
-        logger.warning("Markdown/keyboard not supported, falling back to plain text")
-        await _reply(bot, user_id, markdown)
+        await _reply(bot, user_id, text)
 
 
 def _schedule(rem: dict) -> None:
@@ -203,16 +178,14 @@ async def _fire(rem_id: int) -> None:
     if not targets:
         targets = [rem["creator_qq"]] if rem.get("creator_qq") else []
 
-    # Period cron trigger: send with done button
+    # Period cron trigger: send with markdown formatting
     if rem_type == "period":
         md = f"**周期催促提醒**\n{rem['message']}"
-        kb = _build_keyboard([
-            [{"text": "今日完成", "data": f"remind done {rem_id}"}]
-        ])
         for target_qq in targets:
             try:
-                msg_arr: list[dict] = [{"type": "markdown", "data": {"content": md}}, kb]
-                await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=msg_arr)
+                await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=[
+                    {"type": "markdown", "data": {"content": md}},
+                ])
             except Exception:
                 try:
                     await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=text)
@@ -253,9 +226,6 @@ async def _fire_period_interval(rem_id: int) -> None:
 
     bot = bots[0]
     md = f"**周期催促提醒**\n{rem['message']}"
-    kb = _build_keyboard([
-        [{"text": "今日完成", "data": f"remind done {rem_id}"}]
-    ])
 
     targets = rem.get("targets", [])
     if not targets:
@@ -263,8 +233,9 @@ async def _fire_period_interval(rem_id: int) -> None:
 
     for target_qq in targets:
         try:
-            msg: list[dict] = [{"type": "markdown", "data": {"content": md}}, kb]
-            await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=msg)
+            await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=[
+                {"type": "markdown", "data": {"content": md}},
+            ])
         except Exception:
             try:
                 await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=f"[周期催促提醒] {rem['message']}")
@@ -301,13 +272,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
             await _reply(bot, user_id, "当前没有任何提醒")
             return
         text_list = "\n\n".join(_render_reminder(r) for r in reminders)
-        period_reminders = [r for r in reminders if r.get("type") == "period"]
-        if period_reminders:
-            buttons = [{"text": f"完成 #{r['id']}", "data": f"remind done {r['id']}"} for r in period_reminders[:4]]
-            kb = _build_keyboard([buttons])
-            await _reply_keyboard(bot, user_id, text_list, kb)
-        else:
-            await _reply(bot, user_id, text_list)
+        await _reply_markdown(bot, user_id, text_list)
         return
 
     if sub == "add":

@@ -205,39 +205,15 @@ def _is_duplicate(message_key: str) -> bool:
 
 # --- helpers ---
 
-def _build_keyboard(rows: list[list[dict]]) -> dict:
-    """Build a NapCatQQ keyboard segment with button rows."""
-    return {
-        "type": "keyboard",
-        "data": {
-            "content": [
-                [
-                    {
-                        "text": btn["text"],
-                        "action": {
-                            "type": "input",
-                            "data": btn["data"],
-                            "enter": True,
-                        },
-                    }
-                    for btn in row
-                ]
-                for row in rows
-            ]
-        }
-    }
 
-
-async def _reply_keyboard(bot: Bot, user_id: int, markdown: str, keyboard: dict | None = None) -> None:
-    """Send a markdown message with optional keyboard buttons."""
-    msg: list[dict] = [{"type": "markdown", "data": {"content": markdown}}]
-    if keyboard:
-        msg.append(keyboard)
+async def _reply_markdown(bot: Bot, user_id: int, text: str) -> None:
+    """Send a markdown-formatted message, fall back to plain text if unsupported."""
     try:
-        await bot.call_api("send_msg", message_type="private", user_id=user_id, message=msg)
+        await bot.call_api("send_msg", message_type="private", user_id=user_id, message=[
+            {"type": "markdown", "data": {"content": text}},
+        ])
     except Exception:
-        logger.warning("Markdown/keyboard not supported, falling back to plain text")
-        await _reply_private(bot, user_id, markdown)
+        await _reply_private(bot, user_id, text)
 
 
 def _build_admin_help() -> str:
@@ -379,12 +355,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
     rules = _load_rules_from_file()
 
     if command in {"help", "h"}:
-        kb = _build_keyboard([
-            [{"text": "Status", "data": "status"}, {"text": "Stats", "data": "stats"}, {"text": "Quote", "data": "quote"}],
-            [{"text": "Add", "data": "add "}, {"text": "Remove", "data": "remove "}, {"text": "Disable", "data": "disable "}],
-            [{"text": "Remind List", "data": "remind list"}, {"text": "Remind Add", "data": "remind add "}],
-        ])
-        await _reply_keyboard(bot, user_id, _build_admin_help(), kb)
+        await _reply_markdown(bot, user_id, _build_admin_help())
         return
 
     if command == "status":
@@ -397,11 +368,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             if not rule:
                 await _reply_private(bot, user_id, f"群 {group_id_arg} 不存在")
                 return
-            cmd_on = "on" if not rule["enabled"] else ""
-            cmd_off = "off" if rule["enabled"] else ""
-            toggle_btn = [{"text": "启用", "data": f"on {group_id_arg}"}] if cmd_on else [{"text": "禁用", "data": f"off {group_id_arg}"}]
-            kb = _build_keyboard([toggle_btn])
-            await _reply_keyboard(bot, user_id, _render_rule(rule), kb)
+            await _reply_markdown(bot, user_id, _render_rule(rule))
         else:
             await _reply_private(bot, user_id, "\n\n".join(_render_rule(r) for r in rules))
         return
@@ -486,13 +453,13 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             await _reply_private(bot, user_id, "今日暂无命中统计")
             return
         today_hits.sort(key=lambda x: -x[1])
-        lines = ["**今日关键词统计**", f"日期: {today}", "---"]
-        lines.extend(f"`{word}` — {count}次" for word, count in today_hits)
-        await _reply_keyboard(bot, user_id, "\n".join(lines))
+        lines = [f"今日关键词统计 ({today})", ""]
+        lines.extend(f"  {word}: {count}次" for word, count in today_hits)
+        await _reply_private(bot, user_id, "\n".join(lines))
         return
 
     if command == "quote":
-        await _reply_keyboard(bot, user_id, f"**每日一言**\n---\n{random_quote()}")
+        await _reply_private(bot, user_id, f"[每日一言] {random_quote()}")
         return
 
     if command in {"disable", "enable"}:
