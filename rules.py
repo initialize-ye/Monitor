@@ -52,10 +52,21 @@ def find_rule(rules: list[dict], group_id: int) -> dict | None:
 
 
 def normalize_rule(rule: dict) -> dict:
+    keywords: list[dict] = []
+    for item in rule.get("keywords", []):
+        if isinstance(item, dict):
+            keywords.append({
+                "word": str(item.get("word", "")).strip(),
+                "enabled": bool(item.get("enabled", True)),
+            })
+        else:
+            word = str(item).strip()
+            if word:
+                keywords.append({"word": word, "enabled": True})
     return {
         "group_id": int(rule["group_id"]),
         "targets": sorted({int(item) for item in rule.get("targets", [])}),
-        "keywords": [str(item).strip() for item in rule.get("keywords", []) if str(item).strip()],
+        "keywords": keywords,
         "enabled": bool(rule.get("enabled", True)),
         "use_regex": bool(rule.get("use_regex", False)),
     }

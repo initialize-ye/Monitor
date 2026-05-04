@@ -40,6 +40,29 @@ _recent_keys: deque[tuple[float, str]] = deque(maxlen=1000)
 _recent_seen: set[str] = set()
 _dedupe_seconds = 30
 
+# Per-keyword cooldown (prevent same keyword from triggering repeatedly)
+_keyword_cooldown: dict[str, float] = {}
+_keyword_cooldown_seconds = 15
+
+# Keyword hit stats (in-memory, resets on restart)
+_keyword_stats: dict[str, int] = {}
+
+
+def _check_keyword_cooldown(group_id: int, word: str) -> bool:
+    key = f"{group_id}:{word}"
+    now = time.time()
+    last = _keyword_cooldown.get(key)
+    if last and now - last < _keyword_cooldown_seconds:
+        return True
+    _keyword_cooldown[key] = now
+    return False
+
+
+def _track_keyword_hit(group_id: int, word: str) -> None:
+    today = time.strftime("%Y-%m-%d")
+    key = f"{today}:{group_id}:{word}"
+    _keyword_stats[key] = _keyword_stats.get(key, 0) + 1
+
 _rules_mtime: float | None = None
 _rules_cache: list[dict] = []
 
@@ -53,18 +76,21 @@ def _normalize(text: str) -> str:
     return text if CASE_SENSITIVE else text.lower()
 
 
-def _match_keywords(text: str, keywords: list[str], use_regex: bool) -> list[str]:
+def _match_keywords(text: str, keywords: list[dict], use_regex: bool) -> list[str]:
     matched: list[str] = []
     normalized = _normalize(text)
-    for keyword in keywords:
+    for kw in keywords:
+        if not kw.get("enabled", True):
+            continue
+        word = kw["word"]
         if use_regex:
             flags = 0 if CASE_SENSITIVE else re.IGNORECASE
-            if re.search(keyword, text, flags=flags):
-                matched.append(keyword)
+            if re.search(word, text, flags=flags):
+                matched.append(word)
         else:
-            candidate = keyword if CASE_SENSITIVE else keyword.lower()
+            candidate = word if CASE_SENSITIVE else word.lower()
             if candidate in normalized:
-                matched.append(keyword)
+                matched.append(word)
     return matched
 
 
@@ -183,14 +209,20 @@ def _build_admin_help() -> str:
         "— 关键词监控 —\n"
         "status             查看规则\n"
         "add <关键词>       添加关键词\n"
-        "remove <编号>       删除关键词\n"
+        "remove <编号>      删除关键词\n"
         "set <词1,词2>      替换全部关键词\n"
+        "disable <编号>     临时禁用关键词\n"
+        "enable <编号>      恢复禁用关键词\n"
+        "stats              今日命中统计\n"
         "on / off           启用/禁用监听\n"
         "\n"
         "— 定时提醒 —\n"
-        "remind add HH:MM <内容>  添加每日提醒\n"
-        "remind remove <编号>     删除提醒\n"
-        "remind list              查看所有提醒\n"
+        "remind add HH:MM <内容>           每天提醒\n"
+        "remind once YYYY-MM-DD HH:MM …   单次提醒\n"
+        "remind workday HH:MM <内容>       工作日提醒\n"
+        "remind interval <分钟> <内容>     间隔提醒\n"
+        "remind remove <编号>              删除提醒\n"
+        "remind list                       查看提醒\n"
         "\n"
         "— 高级管理 (多群) —\n"
         "rule addgroup <群号>       添加群规则\n"
@@ -203,7 +235,10 @@ def _build_admin_help() -> str:
 
 
 def _render_rule(rule: dict) -> str:
-    kw_lines = "\n".join(f"  {i}. {kw}" for i, kw in enumerate(rule["keywords"], 1)) if rule["keywords"] else "无"
+    kw_lines = "\n".join(
+        f"  {i}. {kw['word']}{'' if kw.get('enabled', True) else ' ✗'}"
+        for i, kw in enumerate(rule["keywords"], 1)
+    ) if rule["keywords"] else "无"
     return (
         f"群号: {rule['group_id']}\n"
         f"状态: {'启用' if rule['enabled'] else '禁用'}\n"
@@ -255,6 +290,15 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
     matched = _match_keywords(text, rule["keywords"], rule["use_regex"])
     if not matched:
         raise FinishedException
+
+    # Filter keywords on cooldown
+    matched = [kw for kw in matched if not _check_keyword_cooldown(event.group_id, kw)]
+    if not matched:
+        raise FinishedException
+
+    # Track stats
+    for kw in matched:
+        _track_keyword_hit(event.group_id, kw)
 
     message_key = f"{event.group_id}:{event.message_id}"
     if _is_duplicate(message_key):
@@ -354,7 +398,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         if 1 <= idx <= len(rule["keywords"]):
             removed = rule["keywords"].pop(idx - 1)
             _save_rules_file(upsert_rule(rules, rule))
-            await _reply_private(bot, user_id, f"已删除关键词 [{idx}] {removed}\n{_render_rule(rule)}")
+            await _reply_private(bot, user_id, f"已删除关键词 [{idx}] {removed['word']}\n{_render_rule(rule)}")
         else:
             await _reply_private(bot, user_id, f"编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
         return
@@ -374,14 +418,60 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             return
 
         if command == "add":
-            if keyword not in rule["keywords"]:
-                rule["keywords"].append(keyword)
+            if not any(kw["word"] == keyword for kw in rule["keywords"]):
+                rule["keywords"].append({"word": keyword, "enabled": True})
                 _save_rules_file(upsert_rule(rules, rule))
         else:
-            rule["keywords"] = [item.strip() for item in keyword.replace("，", ",").split(",") if item.strip()]
+            rule["keywords"] = [
+                {"word": item.strip(), "enabled": True}
+                for item in keyword.replace("，", ",").split(",") if item.strip()
+            ]
             _save_rules_file(upsert_rule(rules, rule))
 
         await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if command == "stats":
+        today = time.strftime("%Y-%m-%d")
+        today_hits = [(k.split(":", 2)[-1], v) for k, v in _keyword_stats.items() if k.startswith(today)]
+        if not today_hits:
+            await _reply_private(bot, user_id, "今日暂无命中统计")
+            return
+        today_hits.sort(key=lambda x: -x[1])
+        lines = [f"今日关键词统计 ({today})", ""]
+        lines.extend(f"  {word}: {count}次" for word, count in today_hits)
+        await _reply_private(bot, user_id, "\n".join(lines))
+        return
+
+    if command in {"disable", "enable"}:
+        parts = text.split(maxsplit=2)
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            await _reply_private(bot, user_id, f"用法: {command} <编号>\n使用 status 查看编号")
+            return
+        if len(parts) > 2 and parts[2].strip().isdigit():
+            group_id = int(parts[1])
+            idx = int(parts[2])
+        elif len(parts) > 2:
+            await _reply_private(bot, user_id, "编号必须是数字")
+            return
+        else:
+            idx = int(parts[1])
+            if len(rules) != 1:
+                await _reply_private(bot, user_id, f"存在多个群规则，请指定群号: {command} <群号> <编号>")
+                return
+            group_id = rules[0]["group_id"]
+
+        rule = find_rule(rules, group_id)
+        if not rule:
+            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            return
+        if 1 <= idx <= len(rule["keywords"]):
+            rule["keywords"][idx - 1]["enabled"] = command == "enable"
+            _save_rules_file(upsert_rule(rules, rule))
+            status = "已启用" if command == "enable" else "已禁用"
+            await _reply_private(bot, user_id, f"{status}关键词 [{idx}] {rule['keywords'][idx - 1]['word']}\n{_render_rule(rule)}")
+        else:
+            await _reply_private(bot, user_id, f"编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
         return
 
     await _reply_private(bot, user_id, _build_admin_help())
@@ -475,7 +565,7 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
 
 # --- main dispatch ---
 
-COMMANDS = {"status", "add", "remove", "set", "on", "off", "help", "h", "rule", "remind"}
+COMMANDS = {"status", "add", "remove", "set", "on", "off", "disable", "enable", "stats", "help", "h", "rule", "remind"}
 
 
 @admin_matcher.handle()
