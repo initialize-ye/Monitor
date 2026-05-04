@@ -4,18 +4,20 @@
 
 ## 项目概述
 
-基于 NoneBot2 + OneBot v11 的 QQ 关键词转发机器人。监听指定 QQ 群消息，匹配关键词或正则，将命中的消息通过私聊转发给指定 QQ。
+基于 NoneBot2 + OneBot v11 的 QQ 关键词转发机器人。监听指定 QQ 群消息，匹配关键词或正则，将命中的消息通过私聊转发给指定 QQ。支持定时提醒功能。
 
 ## 架构
 
 ```
-bot.py                        # 入口 — 初始化 NoneBot，注册 OneBot v11 适配器，加载 plugins/
+bot.py                        # 入口 — 初始化 NoneBot，注册 OneBot v11 适配器，加载 apscheduler + plugins/
 rules.py                      # 共享模块：rules.json 的加载、保存、查询、规范化（原子写入）
+reminders.py                  # 共享模块：reminders.json 的加载、保存、规范化（原子写入）
 plugins/
   __init__.py
-  keyword_forward.py          # 核心插件：群消息监听、关键词/正则匹配、去重、转发、管理命令
-manage_keywords.py            # CLI 工具：管理 rules.json（list/addgroup/delgroup/addkw/delkw/setkw）
-rules.json                    # 多群规则配置（每次消息实时重载）
+  keyword_forward.py          # 核心插件：群消息监听、关键词匹配、去重、转发、管理命令、提醒命令与调度
+manage_keywords.py            # CLI 工具：管理 rules.json
+rules.json                    # 多群规则配置（热重载）
+reminders.json                # 提醒配置（启动时恢复调度）
 keywords.json                 # 旧版关键词文件（仅迁移时使用）
 .env                          # 环境配置
 ```
@@ -25,14 +27,16 @@ keywords.json                 # 旧版关键词文件（仅迁移时使用）
 ```
 QQ 群消息 → NapCatQQ（Windows）→ 反向 WebSocket → NoneBot2（服务器）
 → keyword_forward.py 匹配关键词 → 命中后通过 NapCatQQ 私聊转发
+
+定时提醒 → APScheduler cron → _fire_reminder → NapCatQQ 私聊发送
 ```
 
 ### 关键设计细节
 
 - **去重**：基于内存 deque + set，30 秒 TTL，跟踪 `(group_id, message_id)` 对
 - **规则热重载**：每次群消息检查 `rules.json` 的 mtime，无需重启
-- **共享模块**：`rules.py` 被 `keyword_forward.py` 和 `manage_keywords.py` 共用，消除重复的加载/保存/查询逻辑
-- **原子写入**：`rules.py` 使用临时文件 + `os.replace()` 写入 `rules.json`，防止写入中断导致文件损坏
+- **提醒调度**：`nonebot-plugin-apscheduler` 管理 cron 任务，启动时从 `reminders.json` 恢复
+- **原子写入**：`rules.py` 和 `reminders.py` 使用临时文件 + `os.replace()` 写入，防止文件损坏
 
 ## 命令
 
@@ -41,26 +45,20 @@ QQ 群消息 → NapCatQQ（Windows）→ 反向 WebSocket → NoneBot2（服务
 python bot.py
 ```
 
-### CLI 规则管理
-```bash
-python manage_keywords.py list
-python manage_keywords.py addgroup <群号>
-python manage_keywords.py delgroup <群号>
-python manage_keywords.py addkw <群号> <关键词>
-python manage_keywords.py delkw <群号> <关键词>
-python manage_keywords.py setkw <群号> <关键词1> <关键词2> ...
-```
-
 ### 管理命令（通过 QQ 私聊发送）
 
-所有命令支持 `[群号]` 参数，单群模式下自动省略。
-
+关键词/规则命令（支持 `[群号]`，单群省略）：
 - `status [群号]` — 查看规则
 - `add [群号] <关键词>` — 添加关键词
 - `remove [群号] <关键词>` — 删除关键词
 - `set [群号] <词1,词2,...>` — 替换全部关键词
 - `on [群号]` / `off [群号]` — 启用/禁用监听
 - `help` — 显示帮助
+
+提醒命令：
+- `remind add <HH:MM> <内容>` — 添加每日提醒（如 `remind add 10:00 背单词`）
+- `remind remove <编号>` — 删除提醒
+- `remind list` — 查看所有提醒
 
 高级命令（群/目标管理）：
 - `rule addgroup <群号>` — 添加群规则
@@ -84,6 +82,7 @@ pip install -r requirements.txt
 | `ADMIN_QQS` | 允许管理的关键词 QQ（留空默认等于 TARGET_QQS） |
 | `KEYWORDS` | 初始关键词（仅旧版迁移时使用） |
 | `RULES_FILE` | rules.json 路径（默认 `rules.json`） |
+| `REMINDERS_FILE` | reminders.json 路径（默认 `reminders.json`） |
 | `CASE_SENSITIVE` | 是否大小写敏感（默认 false） |
 | `USE_REGEX` | 是否把关键词当正则匹配（默认 false） |
 
@@ -98,6 +97,23 @@ pip install -r requirements.txt
       "keywords": ["裤子"],
       "enabled": true,
       "use_regex": false
+    }
+  ]
+}
+```
+
+## `reminders.json` 格式
+
+```json
+{
+  "reminders": [
+    {
+      "id": 1,
+      "hour": 10,
+      "minute": 0,
+      "message": "背单词",
+      "targets": [2731811629],
+      "enabled": true
     }
   ]
 }
