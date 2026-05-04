@@ -180,23 +180,25 @@ def _is_duplicate(message_key: str) -> bool:
 
 def _build_admin_help() -> str:
     return (
-        "命令:\n"
-        "status [群号]         — 查看规则\n"
-        "add [群号] <关键词>    — 添加关键词\n"
-        "remove [群号] <关键词> — 删除关键词\n"
-        "set [群号] <词1,词2>  — 替换全部关键词\n"
-        "on [群号]             — 启用监听\n"
-        "off [群号]            — 禁用监听\n"
-        "help                  — 显示帮助\n\n"
-        "提醒:\n"
-        "remind add <HH:MM> <内容>  — 添加每日提醒\n"
-        "remind remove <编号>       — 删除提醒\n"
-        "remind list                — 查看所有提醒\n\n"
-        "高级命令:\n"
+        "— 关键词监控 —\n"
+        "status             查看规则\n"
+        "add <关键词>       添加关键词\n"
+        "remove <关键词>    删除关键词\n"
+        "set <词1,词2>      替换全部关键词\n"
+        "on / off           启用/禁用监听\n"
+        "\n"
+        "— 定时提醒 —\n"
+        "remind add HH:MM <内容>  添加每日提醒\n"
+        "remind remove <编号>     删除提醒\n"
+        "remind list              查看所有提醒\n"
+        "\n"
+        "— 高级管理 —\n"
         "rule addgroup <群号>\n"
         "rule delgroup <群号>\n"
-        "rule addtarget <群号> <QQ号>\n"
-        "rule deltarget <群号> <QQ号>"
+        "rule addtarget <群号> <QQ>\n"
+        "rule deltarget <群号> <QQ>\n"
+        "\n"
+        "提示: 单群模式下所有命令无需指定群号"
     )
 
 
@@ -259,13 +261,27 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
         raise FinishedException
 
     sender_name = event.sender.card or event.sender.nickname or str(event.user_id)
+    msg_time = time.strftime("%m-%d %H:%M", time.localtime(event.time))
+
+    # Check for images and @mentions
+    extra_parts: list[str] = []
+    image_count = sum(1 for seg in event.message if seg.type == "image")
+    if image_count:
+        extra_parts.append(f"[图片×{image_count}]")
+    for seg in event.message:
+        if seg.type == "at":
+            qq = seg.data.get("qq", "")
+            extra_parts.append(f"@{qq if qq != 'all' else '全体成员'}")
+    extra = " ".join(extra_parts)
+
     forward_text = (
-        "[关键词命中]\n"
-        f"群号: {event.group_id}\n"
-        f"发送者: {sender_name} ({event.user_id})\n"
-        f"命中词: {', '.join(matched)}\n"
-        f"内容: {text}"
+        f"[关键词] {msg_time}\n"
+        f"{sender_name} ({event.user_id})\n"
+        f"命中: {', '.join(matched)}\n"
+        f"{text}"
     )
+    if extra:
+        forward_text += f"\n{extra}"
 
     for target_qq in rule["targets"]:
         await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=forward_text)
