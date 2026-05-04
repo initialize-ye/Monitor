@@ -461,7 +461,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         return
 
     if command == "quote":
-        await _reply_private(bot, user_id, f"[每日一言] {random_quote()}")
+        await _reply_private(bot, user_id, f"[每日一言] {await random_quote()}")
         return
 
     if command in {"disable", "enable"}:

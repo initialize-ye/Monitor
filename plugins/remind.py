@@ -169,7 +169,7 @@ async def _fire(rem_id: int) -> None:
     auto = rem.get("auto_generate", "")
 
     if auto == "quote":
-        text = f"[每日一言] {random_quote()}"
+        text = f"[每日一言] {await random_quote()}"
     else:
         label = REMIND_TYPE_LABELS.get(rem_type, "")
         text = f"[提醒] {rem['message']}"
