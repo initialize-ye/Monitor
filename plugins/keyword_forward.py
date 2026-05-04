@@ -10,6 +10,8 @@ from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, PrivateMessageEv
 from nonebot.exception import FinishedException
 from nonebot.rule import is_type
 
+from rules import find_rule, load_rules, normalize_rule, save_rules, upsert_rule
+
 
 def _parse_int_set(raw: str) -> set[int]:
     values: set[int] = set()
@@ -52,37 +54,22 @@ def _match_keywords(text: str, keywords: list[str], use_regex: bool) -> list[str
     matched: list[str] = []
     normalized = _normalize(text)
     for keyword in keywords:
-        candidate = keyword if CASE_SENSITIVE else keyword.lower()
         if use_regex:
             flags = 0 if CASE_SENSITIVE else re.IGNORECASE
             if re.search(keyword, text, flags=flags):
                 matched.append(keyword)
-        elif candidate in normalized:
-            matched.append(keyword)
+        else:
+            candidate = keyword if CASE_SENSITIVE else keyword.lower()
+            if candidate in normalized:
+                matched.append(keyword)
     return matched
 
 
-def _normalize_rule(rule: dict) -> dict:
-    group_id = int(rule["group_id"])
-    targets = sorted({int(item) for item in rule.get("targets", [])})
-    keywords = [str(item).strip() for item in rule.get("keywords", []) if str(item).strip()]
-    enabled = bool(rule.get("enabled", True))
-    use_regex = bool(rule.get("use_regex", USE_REGEX))
-    return {
-        "group_id": group_id,
-        "targets": targets,
-        "keywords": keywords,
-        "enabled": enabled,
-        "use_regex": use_regex,
-    }
-
-
 def _build_default_rules() -> list[dict]:
-    default_groups = DEFAULT_ALLOWED_GROUPS or []
-    if not default_groups:
+    if not DEFAULT_ALLOWED_GROUPS:
         return []
     return [
-        _normalize_rule(
+        normalize_rule(
             {
                 "group_id": group_id,
                 "targets": sorted(TARGET_QQS),
@@ -91,14 +78,18 @@ def _build_default_rules() -> list[dict]:
                 "use_regex": USE_REGEX,
             }
         )
-        for group_id in default_groups
+        for group_id in DEFAULT_ALLOWED_GROUPS
     ]
 
 
 def _load_legacy_keywords() -> list[str]:
     if not LEGACY_KEYWORDS_FILE.exists():
         return KEYWORDS.copy()
-    data = json.loads(LEGACY_KEYWORDS_FILE.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(LEGACY_KEYWORDS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        logger.warning("Failed to parse %s, falling back to KEYWORDS env", LEGACY_KEYWORDS_FILE)
+        return KEYWORDS.copy()
     file_keywords = data.get("keywords", [])
     return [str(item).strip() for item in file_keywords if str(item).strip()]
 
@@ -108,7 +99,7 @@ def _migrate_legacy_rules() -> list[dict]:
     rules = []
     for group_id in DEFAULT_ALLOWED_GROUPS:
         rules.append(
-            _normalize_rule(
+            normalize_rule(
                 {
                     "group_id": group_id,
                     "targets": sorted(TARGET_QQS),
@@ -121,14 +112,15 @@ def _migrate_legacy_rules() -> list[dict]:
     return rules
 
 
-def _save_rules_to_file(rules: list[dict]) -> list[dict]:
+def _save_rules_file(rules: list[dict]) -> list[dict]:
     global _rules_cache, _rules_mtime
-    normalized = [_normalize_rule(rule) for rule in rules]
+    normalized = [normalize_rule(rule) for rule in rules]
     normalized.sort(key=lambda item: item["group_id"])
-    RULES_FILE.write_text(
-        json.dumps({"rules": normalized}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        save_rules(normalized)
+    except OSError as exc:
+        logger.error("Failed to save rules: %s", exc)
+        return _rules_cache
     _rules_cache = normalized
     _rules_mtime = RULES_FILE.stat().st_mtime
     logger.info("Saved rules to %s", RULES_FILE)
@@ -141,7 +133,7 @@ def _load_rules_from_file() -> list[dict]:
     if not RULES_FILE.exists():
         migrated = _migrate_legacy_rules() or _build_default_rules()
         if migrated:
-            return _save_rules_to_file(migrated)
+            return _save_rules_file(migrated)
         _rules_cache = []
         return _rules_cache
 
@@ -149,29 +141,19 @@ def _load_rules_from_file() -> list[dict]:
     if _rules_mtime is not None and stat.st_mtime == _rules_mtime:
         return _rules_cache
 
-    data = json.loads(RULES_FILE.read_text(encoding="utf-8"))
-    file_rules = data.get("rules", [])
-    if not isinstance(file_rules, list):
-        raise ValueError("rules.json field 'rules' must be a list")
+    try:
+        raw_rules = load_rules()
+    except (RuntimeError, ValueError) as exc:
+        logger.error("Failed to load rules: %s", exc)
+        _rules_cache = []
+        _rules_mtime = stat.st_mtime
+        return _rules_cache
 
-    _rules_cache = [_normalize_rule(item) for item in file_rules]
+    _rules_cache = [normalize_rule(item) for item in raw_rules]
     _rules_cache.sort(key=lambda item: item["group_id"])
     _rules_mtime = stat.st_mtime
     logger.info("Reloaded rules from %s", RULES_FILE)
     return _rules_cache
-
-
-def _find_rule(rules: list[dict], group_id: int) -> dict | None:
-    for rule in rules:
-        if rule["group_id"] == group_id:
-            return rule
-    return None
-
-
-def _upsert_rule(rules: list[dict], new_rule: dict) -> list[dict]:
-    updated = [rule for rule in rules if rule["group_id"] != new_rule["group_id"]]
-    updated.append(_normalize_rule(new_rule))
-    return sorted(updated, key=lambda item: item["group_id"])
 
 
 def _is_duplicate(message_key: str) -> bool:
@@ -224,7 +206,7 @@ async def _reply_private(bot: Bot, user_id: int, message: str) -> None:
 @matcher.handle()
 async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
     rules = _load_rules_from_file()
-    rule = _find_rule(rules, event.group_id)
+    rule = find_rule(rules, event.group_id)
     if not rule or not rule["enabled"]:
         raise FinishedException
 
@@ -256,6 +238,142 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
     logger.info("Forwarded group message %s from %s to %s", event.message_id, event.group_id, rule["targets"])
 
 
+async def _handle_rule_command(bot: Bot, user_id: int, parts: list[str]) -> None:
+    command = parts[1].lower() if len(parts) > 1 else "help"
+    rules = _load_rules_from_file()
+
+    if command in {"help", "h"}:
+        await _reply_private(bot, user_id, _build_admin_help())
+        return
+
+    if command == "list":
+        if not rules:
+            await _reply_private(bot, user_id, "当前没有任何群规则")
+            return
+        await _reply_private(bot, user_id, "\n\n".join(_render_rule(rule) for rule in rules))
+        return
+
+    if len(parts) < 3:
+        await _reply_private(bot, user_id, _build_admin_help())
+        return
+
+    try:
+        group_id = int(parts[2].strip())
+    except ValueError:
+        await _reply_private(bot, user_id, f"无效的群号: {parts[2]}")
+        return
+
+    rule = find_rule(rules, group_id)
+
+    if command == "addgroup":
+        if rule:
+            await _reply_private(bot, user_id, f"群 {group_id} 已存在")
+            return
+        new_rule = {
+            "group_id": group_id,
+            "targets": sorted(TARGET_QQS),
+            "keywords": [],
+            "enabled": True,
+            "use_regex": USE_REGEX,
+        }
+        _save_rules_file(upsert_rule(rules, new_rule))
+        await _reply_private(bot, user_id, f"已添加群规则\n{_render_rule(new_rule)}")
+        return
+
+    if not rule:
+        await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+        return
+
+    if command == "delgroup":
+        updated = [item for item in rules if item["group_id"] != group_id]
+        _save_rules_file(updated)
+        await _reply_private(bot, user_id, f"已删除群规则 {group_id}")
+        return
+
+    if command in {"enable", "disable"}:
+        rule["enabled"] = command == "enable"
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if command in {"addtarget", "deltarget"}:
+        if len(parts) < 4:
+            await _reply_private(bot, user_id, f"用法: rule {command} <群号> <QQ号>")
+            return
+        try:
+            target = int(parts[3].strip())
+        except ValueError:
+            await _reply_private(bot, user_id, f"无效的 QQ 号: {parts[3]}")
+            return
+        targets = set(rule["targets"])
+        if command == "addtarget":
+            targets.add(target)
+        else:
+            targets.discard(target)
+        rule["targets"] = sorted(targets)
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    await _reply_private(bot, user_id, _build_admin_help())
+
+
+async def _handle_kw_command(bot: Bot, user_id: int, parts: list[str]) -> None:
+    command = parts[1].lower() if len(parts) > 1 else "list"
+    rules = _load_rules_from_file()
+
+    if command in {"help", "h"}:
+        await _reply_private(bot, user_id, _build_admin_help())
+        return
+
+    if len(parts) < 3:
+        await _reply_private(bot, user_id, "用法: kw list <群号> / kw add <群号> <关键词>")
+        return
+
+    try:
+        group_id = int(parts[2].strip())
+    except ValueError:
+        await _reply_private(bot, user_id, f"无效的群号: {parts[2]}")
+        return
+
+    rule = find_rule(rules, group_id)
+    if not rule:
+        await _reply_private(bot, user_id, f"群 {group_id} 不存在，请先执行 rule addgroup {group_id}")
+        return
+
+    if command == "list":
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if len(parts) < 4 or not parts[3].strip():
+        await _reply_private(bot, user_id, f"用法: kw {command} <群号> <关键词>")
+        return
+
+    if command == "add":
+        keyword = parts[3].strip()
+        if keyword not in rule["keywords"]:
+            rule["keywords"].append(keyword)
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if command == "remove":
+        keyword = parts[3].strip()
+        rule["keywords"] = [item for item in rule["keywords"] if item != keyword]
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if command == "set":
+        keywords = [item.strip() for item in parts[3].replace("，", ",").split(",") if item.strip()]
+        rule["keywords"] = keywords
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    await _reply_private(bot, user_id, _build_admin_help())
+
+
 @admin_matcher.handle()
 async def handle_admin_command(bot: Bot, event: PrivateMessageEvent) -> None:
     if ADMIN_QQS and event.user_id not in ADMIN_QQS:
@@ -270,127 +388,13 @@ async def handle_admin_command(bot: Bot, event: PrivateMessageEvent) -> None:
         raise FinishedException
 
     parts = text.split(maxsplit=3)
-    if len(parts) == 1:
-        await _reply_private(bot, event.user_id, _build_admin_help())
-        raise FinishedException
 
     namespace = parts[0].lower()
-    command = parts[1].lower() if len(parts) > 1 else "help"
-    rules = _load_rules_from_file()
-
     if namespace == "rule":
-        if command in {"help", "h"}:
-            await _reply_private(bot, event.user_id, _build_admin_help())
-            raise FinishedException
-
-        if command == "list":
-            if not rules:
-                await _reply_private(bot, event.user_id, "当前没有任何群规则")
-                raise FinishedException
-            message = "\n\n".join(_render_rule(rule) for rule in rules)
-            await _reply_private(bot, event.user_id, message)
-            raise FinishedException
-
-        if len(parts) < 3:
-            await _reply_private(bot, event.user_id, _build_admin_help())
-            raise FinishedException
-
-        group_id = int(parts[2].strip())
-        rule = _find_rule(rules, group_id)
-
-        if command == "addgroup":
-            if rule:
-                await _reply_private(bot, event.user_id, f"群 {group_id} 已存在")
-                raise FinishedException
-            new_rule = {
-                "group_id": group_id,
-                "targets": sorted(TARGET_QQS),
-                "keywords": [],
-                "enabled": True,
-                "use_regex": USE_REGEX,
-            }
-            _save_rules_to_file(_upsert_rule(rules, new_rule))
-            await _reply_private(bot, event.user_id, f"已添加群规则\n{_render_rule(new_rule)}")
-            raise FinishedException
-
-        if not rule:
-            await _reply_private(bot, event.user_id, f"群 {group_id} 不存在")
-            raise FinishedException
-
-        if command == "delgroup":
-            updated = [item for item in rules if item["group_id"] != group_id]
-            _save_rules_to_file(updated)
-            await _reply_private(bot, event.user_id, f"已删除群规则 {group_id}")
-            raise FinishedException
-
-        if command in {"enable", "disable"}:
-            rule["enabled"] = command == "enable"
-            _save_rules_to_file(_upsert_rule(rules, rule))
-            await _reply_private(bot, event.user_id, _render_rule(rule))
-            raise FinishedException
-
-        if command in {"addtarget", "deltarget"}:
-            if len(parts) < 4:
-                await _reply_private(bot, event.user_id, f"用法: rule {command} <群号> <QQ号>")
-                raise FinishedException
-            target = int(parts[3].strip())
-            targets = set(rule["targets"])
-            if command == "addtarget":
-                targets.add(target)
-            else:
-                targets.discard(target)
-            rule["targets"] = sorted(targets)
-            _save_rules_to_file(_upsert_rule(rules, rule))
-            await _reply_private(bot, event.user_id, _render_rule(rule))
-            raise FinishedException
-
+        await _handle_rule_command(bot, event.user_id, parts)
+    elif namespace == "kw":
+        await _handle_kw_command(bot, event.user_id, parts)
+    else:
         await _reply_private(bot, event.user_id, _build_admin_help())
-        raise FinishedException
 
-    if namespace == "kw":
-        if command in {"help", "h"}:
-            await _reply_private(bot, event.user_id, _build_admin_help())
-            raise FinishedException
-
-        if len(parts) < 3:
-            await _reply_private(bot, event.user_id, "用法: kw list <群号> / kw add <群号> <关键词>")
-            raise FinishedException
-
-        group_id = int(parts[2].strip())
-        rule = _find_rule(rules, group_id)
-        if not rule:
-            await _reply_private(bot, event.user_id, f"群 {group_id} 不存在，请先执行 rule addgroup {group_id}")
-            raise FinishedException
-
-        if command == "list":
-            await _reply_private(bot, event.user_id, _render_rule(rule))
-            raise FinishedException
-
-        if len(parts) < 4 or not parts[3].strip():
-            await _reply_private(bot, event.user_id, f"用法: kw {command} <群号> <关键词>")
-            raise FinishedException
-
-        if command == "add":
-            keyword = parts[3].strip()
-            if keyword not in rule["keywords"]:
-                rule["keywords"].append(keyword)
-            _save_rules_to_file(_upsert_rule(rules, rule))
-            await _reply_private(bot, event.user_id, _render_rule(rule))
-            raise FinishedException
-
-        if command == "remove":
-            keyword = parts[3].strip()
-            rule["keywords"] = [item for item in rule["keywords"] if item != keyword]
-            _save_rules_to_file(_upsert_rule(rules, rule))
-            await _reply_private(bot, event.user_id, _render_rule(rule))
-            raise FinishedException
-
-        if command == "set":
-            keywords = [item.strip() for item in parts[3].replace("，", ",").split(",") if item.strip()]
-            rule["keywords"] = keywords
-            _save_rules_to_file(_upsert_rule(rules, rule))
-            await _reply_private(bot, event.user_id, _render_rule(rule))
-            raise FinishedException
-
-    await _reply_private(bot, event.user_id, _build_admin_help())
     raise FinishedException

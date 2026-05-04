@@ -1,33 +1,7 @@
 import json
 import sys
-from pathlib import Path
 
-
-RULES_FILE = Path("rules.json")
-
-
-def load_rules() -> list[dict]:
-    if not RULES_FILE.exists():
-        return []
-    data = json.loads(RULES_FILE.read_text(encoding="utf-8"))
-    rules = data.get("rules", [])
-    if not isinstance(rules, list):
-        raise ValueError("rules.json field 'rules' must be a list")
-    return rules
-
-
-def save_rules(rules: list[dict]) -> None:
-    RULES_FILE.write_text(
-        json.dumps({"rules": rules}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
-def find_rule(rules: list[dict], group_id: int) -> dict | None:
-    for rule in rules:
-        if int(rule["group_id"]) == group_id:
-            return rule
-    return None
+from rules import find_rule, load_rules, save_rules
 
 
 def main() -> int:
@@ -36,7 +10,11 @@ def main() -> int:
         return 1
 
     command = sys.argv[1]
-    rules = load_rules()
+    try:
+        rules = load_rules()
+    except (RuntimeError, ValueError) as exc:
+        print(f"Error: {exc}")
+        return 1
 
     if command == "list":
         print(json.dumps({"rules": rules}, ensure_ascii=False, indent=2))
@@ -52,7 +30,7 @@ def main() -> int:
 
     if command == "delgroup":
         group_id = int(sys.argv[2])
-        rules = [rule for rule in rules if int(rule["group_id"]) != group_id]
+        rules = [rule for rule in rules if rule["group_id"] != group_id]
         save_rules(rules)
         print(json.dumps({"rules": rules}, ensure_ascii=False, indent=2))
         return 0
