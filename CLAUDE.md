@@ -52,6 +52,16 @@ python manage_keywords.py setkw <群号> <关键词1> <关键词2> ...
 ```
 
 ### 管理命令（通过 QQ 私聊发送）
+
+#### 简化命令（单群模式，rules.json 只有 1 条规则时自动生效）
+- `status` — 查看当前规则
+- `add <关键词>` — 添加关键词
+- `remove <关键词>` — 删除关键词
+- `set <词1,词2,...>` — 替换全部关键词
+- `on` / `off` — 启用/禁用监听
+- `help` — 显示帮助
+
+#### 完整命令（多群模式）
 - `rule list` — 查看全部群规则
 - `rule addgroup <群号>` — 添加群规则
 - `rule delgroup <群号>` — 删除群规则

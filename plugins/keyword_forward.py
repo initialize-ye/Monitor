@@ -171,12 +171,29 @@ def _is_duplicate(message_key: str) -> bool:
 
 
 def _build_admin_help() -> str:
+    rules = _load_rules_from_file()
+    single = len(rules) == 1
+
+    if single:
+        return (
+            "简化命令（单群模式）:\n"
+            "status         — 查看当前规则\n"
+            "add <关键词>    — 添加关键词\n"
+            "remove <关键词> — 删除关键词\n"
+            "set <词1,词2>   — 替换全部关键词\n"
+            "on              — 启用监听\n"
+            "off             — 禁用监听\n"
+            "help            — 显示帮助\n\n"
+            "完整命令（多群模式）:\n"
+            "rule list / addgroup <群号> / delgroup <群号>\n"
+            "rule addtarget <群号> <QQ号> / deltarget <群号> <QQ号>\n"
+            "rule enable <群号> / disable <群号>\n"
+            "kw list <群号> / kw add <群号> <关键词>\n"
+            "kw remove <群号> <关键词> / kw set <群号> <词1,词2>"
+        )
+
     return (
         "管理命令:\n"
-        "kw list <群号>\n"
-        "kw add <群号> <关键词>\n"
-        "kw remove <群号> <关键词>\n"
-        "kw set <群号> <词1,词2,...>\n"
         "rule list\n"
         "rule addgroup <群号>\n"
         "rule delgroup <群号>\n"
@@ -184,6 +201,10 @@ def _build_admin_help() -> str:
         "rule deltarget <群号> <QQ号>\n"
         "rule enable <群号>\n"
         "rule disable <群号>\n"
+        "kw list <群号>\n"
+        "kw add <群号> <关键词>\n"
+        "kw remove <群号> <关键词>\n"
+        "kw set <群号> <词1,词2,...>\n"
         "rule help"
     )
 
@@ -374,6 +395,70 @@ async def _handle_kw_command(bot: Bot, user_id: int, parts: list[str]) -> None:
     await _reply_private(bot, user_id, _build_admin_help())
 
 
+SIMPLE_COMMANDS = {"status", "add", "remove", "set", "on", "off", "help"}
+
+
+async def _handle_simple_command(bot: Bot, user_id: int, text: str) -> None:
+    parts = text.split(maxsplit=2)
+    command = parts[0].lower()
+
+    if command == "help":
+        await _reply_private(bot, user_id, _build_admin_help())
+        return
+
+    rules = _load_rules_from_file()
+    if len(rules) != 1:
+        await _reply_private(bot, user_id, "存在多个群规则，请使用完整命令（输入 help 查看）")
+        return
+
+    group_id = rules[0]["group_id"]
+
+    if command == "status":
+        await _reply_private(bot, user_id, _render_rule(rules[0]))
+        return
+
+    if command == "on":
+        rule = find_rule(rules, group_id)
+        rule["enabled"] = True
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if command == "off":
+        rule = find_rule(rules, group_id)
+        rule["enabled"] = False
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if len(parts) < 2 or not parts[1].strip():
+        await _reply_private(bot, user_id, f"用法: {command} <关键词>")
+        return
+
+    keyword = parts[1].strip()
+    rule = find_rule(rules, group_id)
+
+    if command == "add":
+        if keyword not in rule["keywords"]:
+            rule["keywords"].append(keyword)
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if command == "remove":
+        rule["keywords"] = [item for item in rule["keywords"] if item != keyword]
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+    if command == "set":
+        keywords = [item.strip() for item in keyword.replace("，", ",").split(",") if item.strip()]
+        rule["keywords"] = keywords
+        _save_rules_file(upsert_rule(rules, rule))
+        await _reply_private(bot, user_id, _render_rule(rule))
+        return
+
+
 @admin_matcher.handle()
 async def handle_admin_command(bot: Bot, event: PrivateMessageEvent) -> None:
     if ADMIN_QQS and event.user_id not in ADMIN_QQS:
@@ -384,7 +469,13 @@ async def handle_admin_command(bot: Bot, event: PrivateMessageEvent) -> None:
         raise FinishedException
 
     lower = text.lower()
-    if not (lower.startswith("kw") or lower.startswith("rule")):
+    first_word = lower.split(maxsplit=1)[0]
+
+    if first_word in SIMPLE_COMMANDS:
+        await _handle_simple_command(bot, event.user_id, text)
+        raise FinishedException
+
+    if not (first_word == "kw" or first_word == "rule"):
         raise FinishedException
 
     parts = text.split(maxsplit=3)
