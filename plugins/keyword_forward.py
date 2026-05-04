@@ -183,7 +183,7 @@ def _build_admin_help() -> str:
         "— 关键词监控 —\n"
         "status             查看规则\n"
         "add <关键词>       添加关键词\n"
-        "remove <关键词>    删除关键词\n"
+        "remove <编号>       删除关键词\n"
         "set <词1,词2>      替换全部关键词\n"
         "on / off           启用/禁用监听\n"
         "\n"
@@ -203,11 +203,12 @@ def _build_admin_help() -> str:
 
 
 def _render_rule(rule: dict) -> str:
+    kw_lines = "\n".join(f"  {i}. {kw}" for i, kw in enumerate(rule["keywords"], 1)) if rule["keywords"] else "无"
     return (
         f"群号: {rule['group_id']}\n"
         f"状态: {'启用' if rule['enabled'] else '禁用'}\n"
         f"目标QQ: {', '.join(map(str, rule['targets'])) or '无'}\n"
-        f"关键词: {', '.join(rule['keywords']) or '无'}\n"
+        f"关键词:\n{kw_lines}\n"
         f"正则: {'是' if rule['use_regex'] else '否'}"
     )
 
@@ -328,7 +329,37 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         await _reply_private(bot, user_id, _render_rule(rule))
         return
 
-    if command in {"add", "remove", "set"}:
+    if command == "remove":
+        parts = text.split(maxsplit=2)
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            await _reply_private(bot, user_id, f"用法: remove [群号] <编号>\n使用 status 查看编号")
+            return
+        if len(parts) > 2 and parts[2].strip().isdigit():
+            group_id = int(parts[1])
+            idx = int(parts[2])
+        elif len(parts) > 2:
+            await _reply_private(bot, user_id, "编号必须是数字")
+            return
+        else:
+            idx = int(parts[1])
+            if len(rules) != 1:
+                await _reply_private(bot, user_id, "存在多个群规则，请指定群号: remove <群号> <编号>")
+                return
+            group_id = rules[0]["group_id"]
+
+        rule = find_rule(rules, group_id)
+        if not rule:
+            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            return
+        if 1 <= idx <= len(rule["keywords"]):
+            removed = rule["keywords"].pop(idx - 1)
+            _save_rules_file(upsert_rule(rules, rule))
+            await _reply_private(bot, user_id, f"已删除关键词 [{idx}] {removed}\n{_render_rule(rule)}")
+        else:
+            await _reply_private(bot, user_id, f"编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
+        return
+
+    if command in {"add", "set"}:
         group_id_arg, keyword = _resolve_group_id(text)
         if not keyword:
             await _reply_private(bot, user_id, f"用法: {command} [群号] <关键词>")
@@ -345,12 +376,11 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         if command == "add":
             if keyword not in rule["keywords"]:
                 rule["keywords"].append(keyword)
-        elif command == "remove":
-            rule["keywords"] = [item for item in rule["keywords"] if item != keyword]
+                _save_rules_file(upsert_rule(rules, rule))
         else:
             rule["keywords"] = [item.strip() for item in keyword.replace("，", ",").split(",") if item.strip()]
+            _save_rules_file(upsert_rule(rules, rule))
 
-        _save_rules_file(upsert_rule(rules, rule))
         await _reply_private(bot, user_id, _render_rule(rule))
         return
 
