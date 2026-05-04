@@ -37,11 +37,50 @@ def _render_reminder(rem: dict) -> str:
         lines.append("内容: [每日一言] 每次触发随机生成")
     else:
         lines.append(f"内容: {rem['message']}")
+    if rem_type == "period" and rem.get("last_done_date") == date.today().isoformat():
+        lines.append("状态: 今日已完成")
     return "\n".join(lines)
 
 
 async def _reply(bot: Bot, user_id: int, message: str) -> None:
     await bot.call_api("send_msg", message_type="private", user_id=user_id, message=message)
+
+
+def _build_keyboard(rows: list[list[dict]]) -> dict:
+    """Build a NapCatQQ keyboard segment with button rows."""
+    return {
+        "type": "keyboard",
+        "data": {
+            "content": {
+                "rows": [
+                    [
+                        {
+                            "id": f"k_{i}_{j}",
+                            "label": btn["label"],
+                            "permission": {"type": 2},
+                            "reply": "",
+                            "enter": True,
+                            "data": btn["data"],
+                        }
+                        for j, btn in enumerate(row)
+                    ]
+                    for i, row in enumerate(rows)
+                ]
+            }
+        }
+    }
+
+
+async def _reply_keyboard(bot: Bot, user_id: int, markdown: str, keyboard: dict | None = None) -> None:
+    """Send a markdown message with optional keyboard buttons."""
+    msg: list[dict] = [{"type": "markdown", "data": {"content": markdown}}]
+    if keyboard:
+        msg.append(keyboard)
+    try:
+        await bot.call_api("send_msg", message_type="private", user_id=user_id, message=msg)
+    except Exception:
+        logger.warning("Markdown/keyboard not supported, falling back to plain text")
+        await _reply(bot, user_id, markdown)
 
 
 def _schedule(rem: dict) -> None:
@@ -166,6 +205,24 @@ async def _fire(rem_id: int) -> None:
     if not targets:
         targets = [rem["creator_qq"]] if rem.get("creator_qq") else []
 
+    # Period cron trigger: send with done button
+    if rem_type == "period":
+        md = f"**周期催促提醒**\n{rem['message']}"
+        kb = _build_keyboard([
+            [{"label": "今日完成", "data": f"remind done {rem_id}"}]
+        ])
+        for target_qq in targets:
+            try:
+                msg_arr: list[dict] = [{"type": "markdown", "data": {"content": md}}, kb]
+                await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=msg_arr)
+            except Exception:
+                try:
+                    await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=text)
+                except Exception as exc:
+                    logger.error("Failed to send period reminder %s to %s: %s", rem_id, target_qq, exc)
+        logger.info("Fired period reminder %s: %s", rem_id, rem["message"])
+        return
+
     for target_qq in targets:
         try:
             await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=text)
@@ -197,7 +254,10 @@ async def _fire_period_interval(rem_id: int) -> None:
         return
 
     bot = bots[0]
-    text = f"[周期催促提醒] {rem['message']}"
+    md = f"**周期催促提醒**\n{rem['message']}"
+    kb = _build_keyboard([
+        [{"label": "今日完成", "data": f"remind done {rem_id}"}]
+    ])
 
     targets = rem.get("targets", [])
     if not targets:
@@ -205,9 +265,13 @@ async def _fire_period_interval(rem_id: int) -> None:
 
     for target_qq in targets:
         try:
-            await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=text)
-        except Exception as exc:
-            logger.error("Failed to send period interval reminder %s to %s: %s", rem_id, target_qq, exc)
+            msg: list[dict] = [{"type": "markdown", "data": {"content": md}}, kb]
+            await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=msg)
+        except Exception:
+            try:
+                await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=f"[周期催促提醒] {rem['message']}")
+            except Exception as exc:
+                logger.error("Failed to send period interval reminder %s to %s: %s", rem_id, target_qq, exc)
 
     logger.info("Period interval reminder %s: %s", rem_id, rem["message"])
 
@@ -238,7 +302,14 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         if not reminders:
             await _reply(bot, user_id, "当前没有任何提醒")
             return
-        await _reply(bot, user_id, "\n\n".join(_render_reminder(r) for r in reminders))
+        text_list = "\n\n".join(_render_reminder(r) for r in reminders)
+        period_reminders = [r for r in reminders if r.get("type") == "period"]
+        if period_reminders:
+            buttons = [{"label": f"完成 #{r['id']}", "data": f"remind done {r['id']}"} for r in period_reminders[:4]]
+            kb = _build_keyboard([buttons])
+            await _reply_keyboard(bot, user_id, text_list, kb)
+        else:
+            await _reply(bot, user_id, text_list)
         return
 
     if sub == "add":
