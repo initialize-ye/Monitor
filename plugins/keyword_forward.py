@@ -192,13 +192,13 @@ def _build_admin_help() -> str:
         "remind remove <编号>     删除提醒\n"
         "remind list              查看所有提醒\n"
         "\n"
-        "— 高级管理 —\n"
-        "rule addgroup <群号>\n"
-        "rule delgroup <群号>\n"
-        "rule addtarget <群号> <QQ>\n"
-        "rule deltarget <群号> <QQ>\n"
+        "— 高级管理 (多群) —\n"
+        "rule addgroup <群号>       添加群规则\n"
+        "rule delgroup <群号>       删除群规则\n"
+        "rule addtarget <群号> <QQ> 添加转发目标\n"
+        "rule deltarget <群号> <QQ> 删除转发目标\n"
         "\n"
-        "提示: 单群模式下所有命令无需指定群号"
+        "提示: 单群模式下关键词命令无需群号"
     )
 
 
