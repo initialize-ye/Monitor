@@ -228,7 +228,8 @@ def render_text_to_image(text: str, title: str = "Bot") -> str:
         elif style == "col2":
             draw.text((PADDING, y), ent_text, fill=COLOR_BODY, font=font)
             if col2:
-                draw.text((COL2_X, y), col2, fill=COLOR_MUTED, font=font)
+                cw, _ = _measure(draw, col2, font)
+                draw.text((COL2_X - cw, y), col2, fill=COLOR_MUTED, font=font)
             y += LINE_HEIGHT
         else:
             draw.text((PADDING, y), ent_text, fill=COLOR_BODY, font=font)
