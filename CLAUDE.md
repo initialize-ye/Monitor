@@ -12,9 +12,12 @@
 bot.py                        # 入口 — 初始化 NoneBot，注册 OneBot v11 适配器，加载 apscheduler + plugins/
 rules.py                      # 共享模块：rules.json 的加载、保存、查询、规范化（原子写入）
 reminders.py                  # 共享模块：reminders.json 的加载、保存、规范化（原子写入）
+session_manager.py            # 会话管理：用户交互状态跟踪，5分钟超时自动清理
+image_renderer.py             # 图片渲染：Pillow 生成样式化 PNG 卡片（QQ 私聊不支持 markdown）
+quotes.py                     # 名言获取：hitokoto API + 本地 fallback
 plugins/
   __init__.py
-  keyword_forward.py          # 核心插件：群消息监听、关键词匹配、去重、转发、管理命令
+  keyword_forward.py          # 核心插件：群消息监听、关键词匹配、去重、转发、管理命令、交互菜单
   remind.py                   # 提醒插件：定时提醒的调度、触发、管理命令
 manage_keywords.py            # CLI 工具：管理 rules.json
 rules.json                    # 多群规则配置（热重载）
@@ -38,6 +41,10 @@ QQ 群消息 → NapCatQQ（Windows）→ 反向 WebSocket → NoneBot2（服务
 - **规则热重载**：每次群消息检查 `rules.json` 的 mtime，无需重启
 - **提醒调度**：`plugins/remind.py` 管理 cron 任务（`nonebot-plugin-apscheduler`），启动时自动从 `reminders.json` 恢复，提醒发送给创建者而非全局 TARGET_QQS
 - **原子写入**：`rules.py` 和 `reminders.py` 使用临时文件 + `os.replace()` 写入，防止文件损坏
+- **图片消息**：QQ 私聊不支持 markdown 渲染，使用 `image_renderer.py` 生成样式化 PNG 卡片（Pillow），支持两列布局、section headers、emoji
+- **关键词冷却**：每个关键词在同一群内 15 秒冷却，防止短时间重复触发
+- **统计追踪**：内存中按日期+群+关键词统计命中次数（重启后清空）
+- **交互菜单**：`session_manager.py` 管理用户会话状态，5分钟超时，支持数字选项菜单交互（模拟按钮体验）
 
 ## 命令
 
@@ -53,11 +60,22 @@ python bot.py
 - `add [群号] <关键词>` — 添加关键词
 - `remove [群号] <编号>` — 按编号删除关键词（用 `status` 查看编号）
 - `set [群号] <词1,词2,...>` — 替换全部关键词
+- `disable [群号] <编号>` — 临时禁用关键词
+- `enable [群号] <编号>` — 恢复禁用关键词
 - `on [群号]` / `off [群号]` — 启用/禁用监听
+- `stats` — 今日关键词命中统计
+- `quote` — 随机励志名言
 - `help` — 显示帮助
 
 提醒命令：
-- `remind add <HH:MM> <内容>` — 添加每日提醒（如 `remind add 10:00 背单词`）
+- `remind <HH:MM> <内容>` — 添加每日提醒（快捷方式，如 `remind 10:00 背单词`）
+- `remind add <HH:MM> <内容>` — 添加每日提醒（完整语法）
+- `remind once <YYYY-MM-DD> <HH:MM> <内容>` — 单次提醒
+- `remind workday <HH:MM> <内容>` — 工作日提醒（周一至周五）
+- `remind interval <分钟> <内容>` — 间隔提醒
+- `remind period <HH:MM> <分钟> <内容>` — 周期催促（不完成一直催）
+- `remind quote <HH:MM>` — 每日一言（随机名言，自动生成）
+- `remind done <编号>` — 标记周期催促今日完成
 - `remind remove <编号>` — 删除提醒
 - `remind list` — 查看所有提醒
 
@@ -110,9 +128,32 @@ pip install -r requirements.txt
   "reminders": [
     {
       "id": 1,
+      "type": "daily",
       "hour": 10,
       "minute": 0,
       "message": "背单词",
+      "targets": [],
+      "enabled": true,
+      "creator_qq": 2731811629
+    },
+    {
+      "id": 2,
+      "type": "period",
+      "hour": 18,
+      "minute": 0,
+      "repeat_interval": 10,
+      "message": "背单词",
+      "last_done_date": "2026-05-05",
+      "targets": [],
+      "enabled": true,
+      "creator_qq": 2731811629
+    },
+    {
+      "id": 3,
+      "type": "daily",
+      "hour": 9,
+      "minute": 0,
+      "auto_generate": "quote",
       "targets": [],
       "enabled": true,
       "creator_qq": 2731811629
@@ -120,3 +161,68 @@ pip install -r requirements.txt
   ]
 }
 ```
+
+提醒类型：
+- `daily` — 每天固定时间
+- `workday` — 工作日（周一至周五）
+- `once` — 单次提醒（需要 `date` 字段，触发后自动删除）
+- `interval` — 间隔提醒（需要 `interval_minutes` 字段）
+- `period` — 周期催促（每天固定时间开始，每隔 N 分钟催促一次，直到标记完成）
+
+特殊字段：
+- `auto_generate: "quote"` — 触发时自动生成随机名言，不使用 `message` 字段
+- `last_done_date` — 周期催促类型专用，记录最后完成日期
+
+## 图片渲染 (`image_renderer.py`)
+
+QQ 私聊不支持 markdown 渲染，所有格式化消息通过 Pillow 生成 PNG 图片卡片。
+
+设计常量：
+- `CARD_WIDTH = 860` — 卡片宽度
+- `PADDING = 28` — 边距
+- `COL2_X = 420` — 两列布局时第二列起始位置（左对齐）
+- `CORNER_RADIUS = 14` — 圆角半径
+- `FONT_SIZE = 17` — 正文字号
+- `TITLE_FONT_SIZE = 20` — 标题字号
+
+两列布局检测：
+- 正则 `r"^(\S.+?)  {3,}(\S.+)$"` 匹配 3+ 空格分隔的行
+- 检测条件：`PADDING + 命令宽度 + 20px <= COL2_X`
+- 命令在左（x=28），描述在右（x=420），左对齐
+- 不满足条件时降级为单行正文自动换行
+
+字体优先级（跨平台中文支持）：
+1. Linux: wqy-microhei, wqy-zenhei, NotoSansCJK
+2. macOS: PingFang, STHeiti
+3. Windows: msyh (微软雅黑), simhei, simsun
+
+## 开发注意事项
+
+### 交互菜单系统
+- `status` 命令显示规则时会附带数字选项菜单（1-5）
+- 用户回复数字触发对应操作，无需输入完整命令
+- 会话状态存储在 `_session_manager`，5分钟自动过期
+- 每10分钟自动清理过期会话（通过 APScheduler）
+- 会话状态类型：
+  - `menu_status` — 显示菜单后等待用户选择
+  - `awaiting_keyword_add` — 等待用户输入新关键词
+  - `awaiting_keyword_remove` — 等待用户输入要删除的编号
+  - `awaiting_keyword_toggle` — 等待用户输入要切换状态的编号
+
+### 修改命令交互
+- 所有格式化输出使用 `_reply_image(bot, user_id, text, title)` 生成图片消息
+- 简短单行消息（如确认、错误）可用 `_reply_private(bot, user_id, text)` 纯文本
+- 帮助文本使用两列布局：命令与描述之间至少 3 个空格
+
+### 修改提醒功能
+- 新增提醒类型需在 `REMIND_TYPE_LABELS` 添加标签
+- 调度逻辑在 `_schedule()` 中根据 `type` 字段分发
+- 触发逻辑在 `_fire()` 中处理，注意 `auto_generate` 特殊字段
+- 周期催促需同时管理 cron 任务和 interval 任务
+
+### 修改图片渲染
+- 修改样式常量后需重启机器人
+- 字体缓存在 `_font_cache` 中，按字号缓存
+- 两列布局检测阈值 `COL2_X - PADDING - 20 = 372px`，超过此宽度的命令会降级为单行
+- Section headers 以 `—`/`─`/`━` 开头，渲染为蓝色带左侧竖条
+- Separator lines 全为 `─━—－-` 字符，渲染为水平分隔线

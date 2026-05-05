@@ -450,25 +450,34 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         await _reply(bot, user_id, f"🗑️ 已删除提醒 {rem_id}")
         return
 
+    # Shortcut: "remind HH:MM <内容>" → daily reminder without "add"
+    if re.match(r"^\d{1,2}:\d{2}$", sub):
+        if len(parts) < 3 or not parts[2].strip():
+            await _reply(bot, user_id, "用法: remind <HH:MM> <内容>\n例如: remind 10:00 背单词")
+            return
+        await _add_timed(bot, user_id, ["remind", "add", parts[1], parts[2]], "daily")
+        return
+
     await _reply_image(
         bot, user_id,
         "用法:\n"
-        "remind add HH:MM <内容>                          — 每天提醒\n"
-        "remind once YYYY-MM-DD HH:MM …                   — 单次提醒\n"
-        "remind workday HH:MM <内容>                      — 工作日提醒\n"
-        "remind interval <分钟> <内容>                    — 间隔提醒\n"
-        "remind period <HH:MM> <分钟> <内容>              — 周期催促(不做一直催)\n"
-        "remind done <编号>                               — 标记周期催促今日完成\n"
-        "remind quote HH:MM                               — 每日一言(随机名言)\n"
-        "remind remove <编号>                              — 删除提醒\n"
-        "remind list                                       — 查看提醒",
+        "remind <HH:MM> <内容>                            每天提醒\n"
+        "remind add HH:MM <内容>                          每天提醒\n"
+        "remind once YYYY-MM-DD HH:MM …                  单次提醒\n"
+        "remind workday HH:MM <内容>                     工作日提醒\n"
+        "remind interval <分钟> <内容>                   间隔提醒\n"
+        "remind period HH:MM <分钟> <内容>               周期催促(不做一直催)\n"
+        "remind done <编号>                              标记周期催促今日完成\n"
+        "remind quote HH:MM                              每日一言(随机名言)\n"
+        "remind remove <编号>                            删除提醒\n"
+        "remind list                                     查看提醒",
         title="提醒命令",
     )
 
 
 async def _add_daily(bot: Bot, user_id: int, parts: list[str]) -> None:
     if len(parts) < 4 or not parts[2].strip() or not parts[3].strip():
-        await _reply(bot, user_id, "用法: remind add <HH:MM> <内容>\n例如: remind add 10:00 背单词")
+        await _reply(bot, user_id, "用法: remind <HH:MM> <内容>\n例如: remind 10:00 背单词")
         return
     await _add_timed(bot, user_id, parts, "daily")
 

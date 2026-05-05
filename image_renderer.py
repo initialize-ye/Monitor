@@ -16,7 +16,7 @@ HEADER_LINE_HEIGHT = 30
 FONT_SIZE = 17
 TITLE_FONT_SIZE = 20
 HEADER_FONT_SIZE = 18
-COL2_X = 320  # X position for second column (command descriptions)
+COL2_X = 420  # X position for second column (command descriptions)
 CORNER_RADIUS = 14
 
 COLOR_BG = (255, 255, 255)
@@ -141,7 +141,7 @@ def render_text_to_image(text: str, title: str = "Bot") -> str:
         elif m := _TWO_COL_RE.match(line):
             col1, col2 = m.group(1), m.group(2)
             w1, _ = _measure(tmp, col1, font)
-            if w1 < COL2_X - PADDING - 20:
+            if PADDING + w1 + 20 <= COL2_X:
                 entries.append((col1, "col2", col2))
             else:
                 sub = _wrap_text(tmp, line, font, content_width)
@@ -228,8 +228,7 @@ def render_text_to_image(text: str, title: str = "Bot") -> str:
         elif style == "col2":
             draw.text((PADDING, y), ent_text, fill=COLOR_BODY, font=font)
             if col2:
-                cw, _ = _measure(draw, col2, font)
-                draw.text((COL2_X - cw, y), col2, fill=COLOR_MUTED, font=font)
+                draw.text((COL2_X, y), col2, fill=COLOR_MUTED, font=font)
             y += LINE_HEIGHT
         else:
             draw.text((PADDING, y), ent_text, fill=COLOR_BODY, font=font)
