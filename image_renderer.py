@@ -8,25 +8,28 @@ import re
 from PIL import Image, ImageDraw, ImageFont
 
 # --- Design constants ---
-CARD_WIDTH = 860
-PADDING = 28
-TITLE_HEIGHT = 56
-LINE_HEIGHT = 36  # Increased for better spacing
-HEADER_LINE_HEIGHT = 32
-FONT_SIZE = 17
-TITLE_FONT_SIZE = 20
-HEADER_FONT_SIZE = 18
-COL2_X = 460  # Increased to prevent overlap with emoji
-CORNER_RADIUS = 14
+CARD_WIDTH = 900
+PADDING = 32
+TITLE_HEIGHT = 64
+LINE_HEIGHT = 40
+HEADER_LINE_HEIGHT = 38
+SECTION_SPACING = 16  # Extra spacing between sections
+FONT_SIZE = 18
+TITLE_FONT_SIZE = 22
+HEADER_FONT_SIZE = 19
+COL2_X = 500
+CORNER_RADIUS = 16
 
+# Modern color palette with better contrast
 COLOR_BG = (255, 255, 255)
-COLOR_TITLE_BG = (81, 133, 249)
+COLOR_TITLE_BG = (59, 130, 246)  # Modern blue
 COLOR_TITLE_TEXT = (255, 255, 255)
-COLOR_BODY = (48, 49, 51)
-COLOR_ACCENT = (81, 133, 249)
-COLOR_MUTED = (140, 145, 150)
-COLOR_SEPARATOR = (230, 232, 235)
-COLOR_BORDER = (200, 204, 209)
+COLOR_BODY = (31, 41, 55)  # Darker for better readability
+COLOR_ACCENT = (59, 130, 246)
+COLOR_MUTED = (107, 114, 128)  # Better contrast
+COLOR_SEPARATOR = (229, 231, 235)
+COLOR_BORDER = (209, 213, 219)
+COLOR_LIGHT_BG = (249, 250, 251)  # Light background for sections
 
 _HEADER_PREFIXES = ("—", "─", "━")
 _TWO_COL_RE = re.compile(r"^(\S.+?)  {3,}(\S.+)$")
@@ -115,8 +118,9 @@ def render_text_to_image(text: str, title: str = "Bot") -> str:
     - Rounded card with colored title bar
     - Two-column detection: lines with 3+ spaces between words are split into
       command (left) and description (right) columns for proportional fonts
-    - Section headers (starting with —/─/━) in accent color
+    - Section headers (starting with —/─/━) in accent color with background
     - Separator lines (all dashes) as thin horizontal rules
+    - Improved spacing and visual hierarchy
     """
     font = _get_font(FONT_SIZE)
     header_font = _get_font(HEADER_FONT_SIZE)
@@ -141,8 +145,8 @@ def render_text_to_image(text: str, title: str = "Bot") -> str:
         elif m := _TWO_COL_RE.match(line):
             col1, col2 = m.group(1), m.group(2)
             w1, _ = _measure(tmp, col1, font)
-            # More generous threshold for emoji and Chinese characters
-            if PADDING + w1 + 30 <= COL2_X:
+            # Check if col1 fits before COL2_X with margin
+            if PADDING + w1 + 40 <= COL2_X:
                 entries.append((col1, "col2", col2))
             else:
                 sub = _wrap_text(tmp, line, font, content_width)
@@ -153,31 +157,41 @@ def render_text_to_image(text: str, title: str = "Bot") -> str:
             for s in sub:
                 entries.append((s, "body", None))
 
-    # Calculate image height
+    # Calculate image height with improved spacing
     body_height = PADDING * 2
+    prev_style = None
     for ent_text, style, _ in entries:
+        # Add extra spacing between sections
+        if prev_style == "header" and style != "header":
+            body_height += SECTION_SPACING // 2
+        elif style == "header" and prev_style not in (None, "header"):
+            body_height += SECTION_SPACING
+
         if not ent_text:
             body_height += LINE_HEIGHT // 2
         elif style == "sep":
-            body_height += 24
+            body_height += 32
         elif style == "header":
-            body_height += HEADER_LINE_HEIGHT
+            body_height += HEADER_LINE_HEIGHT + 8  # Extra padding for header
         else:
             body_height += LINE_HEIGHT
-    img_height = TITLE_HEIGHT + body_height + 4
+
+        prev_style = style
+
+    img_height = TITLE_HEIGHT + body_height + 8
 
     # Create image
     img = Image.new("RGBA", (CARD_WIDTH, img_height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # Card background
+    # Card background with shadow effect
     draw.rounded_rectangle(
         (0, 0, CARD_WIDTH - 1, img_height - 1),
         radius=CORNER_RADIUS, fill=COLOR_BG,
     )
     draw.rounded_rectangle(
         (0, 0, CARD_WIDTH - 1, img_height - 1),
-        radius=CORNER_RADIUS, outline=COLOR_BORDER, width=1,
+        radius=CORNER_RADIUS, outline=COLOR_BORDER, width=2,
     )
 
     # --- Title bar (rounded top) ---
@@ -187,62 +201,93 @@ def render_text_to_image(text: str, title: str = "Bot") -> str:
     )
 
     # Accent dot + title text (left-aligned)
+    dot_size = 10
+    dot_y = TITLE_HEIGHT // 2 - dot_size // 2
     draw.ellipse(
-        (PADDING, TITLE_HEIGHT // 2 - 4, PADDING + 8, TITLE_HEIGHT // 2 + 4),
+        (PADDING, dot_y, PADDING + dot_size, dot_y + dot_size),
         fill=COLOR_TITLE_TEXT,
     )
     draw.text(
-        (PADDING + 18, (TITLE_HEIGHT - FONT_SIZE) // 2 - 1),
+        (PADDING + 22, (TITLE_HEIGHT - TITLE_FONT_SIZE) // 2 - 2),
         title, fill=COLOR_TITLE_TEXT, font=title_font,
     )
 
-    # Separator line under title bar
+    # Subtle separator line under title bar
     draw.line(
         [(PADDING, TITLE_HEIGHT), (CARD_WIDTH - PADDING, TITLE_HEIGHT)],
-        fill=(255, 255, 255, 100), width=1,
+        fill=(255, 255, 255, 80), width=1,
     )
 
     # --- Body ---
     y = TITLE_HEIGHT + PADDING
+    prev_style = None
+
     for ent_text, style, col2 in entries:
+        # Add extra spacing between sections
+        if prev_style == "header" and style != "header":
+            y += SECTION_SPACING // 2
+        elif style == "header" and prev_style not in (None, "header"):
+            y += SECTION_SPACING
+
         if not ent_text:
             y += LINE_HEIGHT // 2
+            prev_style = style
             continue
+
         if style == "sep":
             draw.line(
-                [(PADDING, y + 12), (CARD_WIDTH - PADDING, y + 12)],
+                [(PADDING, y + 16), (CARD_WIDTH - PADDING, y + 16)],
                 fill=COLOR_SEPARATOR, width=2,
             )
-            y += 24
+            y += 32
+            prev_style = style
             continue
+
         if style == "header":
-            # Colored left bar + header text
-            draw.rectangle(
-                [(PADDING, y + 3), (PADDING + 3, y + HEADER_LINE_HEIGHT - 3)],
-                fill=COLOR_ACCENT,
+            # Header with light background
+            header_bg_height = HEADER_LINE_HEIGHT + 8
+            draw.rounded_rectangle(
+                [(PADDING - 8, y), (CARD_WIDTH - PADDING + 8, y + header_bg_height)],
+                radius=8, fill=COLOR_LIGHT_BG,
             )
+
+            # Colored left bar
+            draw.rounded_rectangle(
+                [(PADDING, y + 4), (PADDING + 4, y + header_bg_height - 4)],
+                radius=2, fill=COLOR_ACCENT,
+            )
+
+            # Header text
             draw.text(
-                (PADDING + 12, y + 1), ent_text,
+                (PADDING + 16, y + 4), ent_text,
                 fill=COLOR_ACCENT, font=header_font,
             )
-            y += HEADER_LINE_HEIGHT
-        elif style == "col2":
+            y += header_bg_height
+            prev_style = style
+            continue
+
+        if style == "col2":
+            # Two-column layout
             draw.text((PADDING, y), ent_text, fill=COLOR_BODY, font=font)
             if col2:
                 draw.text((COL2_X, y), col2, fill=COLOR_MUTED, font=font)
             y += LINE_HEIGHT
         else:
+            # Regular body text
             draw.text((PADDING, y), ent_text, fill=COLOR_BODY, font=font)
             y += LINE_HEIGHT
 
-    # Bottom accent bar
-    draw.line(
-        [(PADDING, img_height - 3), (CARD_WIDTH - PADDING, img_height - 3)],
-        fill=COLOR_TITLE_BG, width=2,
+        prev_style = style
+
+    # Bottom accent bar with rounded corners
+    bar_y = img_height - 6
+    draw.rounded_rectangle(
+        [(PADDING, bar_y), (CARD_WIDTH - PADDING, bar_y + 3)],
+        radius=2, fill=COLOR_TITLE_BG,
     )
 
     out = img.convert("RGB")
     buf = io.BytesIO()
-    out.save(buf, format="PNG")
+    out.save(buf, format="PNG", quality=95, optimize=True)
     b64 = base64.b64encode(buf.getvalue()).decode()
     return f"base64://{b64}"
