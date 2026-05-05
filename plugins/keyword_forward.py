@@ -50,8 +50,8 @@ _keyword_cooldown_seconds = 15
 # Keyword hit stats (in-memory, resets on restart)
 _keyword_stats: dict[str, int] = {}
 
-# Session manager for interactive menus
-_session_manager = SessionManager(timeout_seconds=300)
+# Session manager for interactive menus (max 1000 concurrent sessions)
+_session_manager = SessionManager(timeout_seconds=300, max_sessions=1000)
 
 
 def _check_keyword_cooldown(group_id: int, word: str) -> bool:
@@ -253,6 +253,9 @@ def _build_admin_help() -> str:
         "rule addtarget <群号> <QQ>          添加转发目标\n"
         "rule deltarget <群号> <QQ>          删除转发目标\n"
         "\n"
+        "— 其他 —\n"
+        "cancel                              取消当前操作\n"
+        "\n"
         "💡 单群模式下关键词命令无需群号"
     )
 
@@ -286,7 +289,8 @@ def _render_rule_with_menu(rule: dict) -> str:
         "4️⃣  查看统计\n"
         "5️⃣  获取随机名言\n"
         "\n"
-        "💡 回复数字选择操作"
+        "💡 回复数字选择操作\n"
+        "💡 输入 cancel 取消操作"
     )
     return base + menu
 
@@ -388,6 +392,15 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         await _reply_image(bot, user_id, _build_admin_help(), title="帮助")
         return
 
+    if command == "cancel":
+        session = await _session_manager.get_state(user_id)
+        if session:
+            await _session_manager.clear_state(user_id)
+            await _reply_private(bot, user_id, "✅ 已取消当前操作")
+        else:
+            await _reply_private(bot, user_id, "💡 当前没有进行中的操作")
+        return
+
     if command == "status":
         if not rules:
             await _reply_private(bot, user_id, "当前没有任何群规则")
@@ -399,12 +412,12 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
                 await _reply_private(bot, user_id, f"群 {group_id_arg} 不存在")
                 return
             # Set session state for interactive menu
-            _session_manager.set_state(user_id, "menu_status", group_id=rule["group_id"])
+            await _session_manager.set_state(user_id, "menu_status", group_id=rule["group_id"])
             await _reply_image(bot, user_id, _render_rule_with_menu(rule), title=f"群 {rule['group_id']}")
         else:
             if len(rules) == 1:
                 # Single rule: show with menu
-                _session_manager.set_state(user_id, "menu_status", group_id=rules[0]["group_id"])
+                await _session_manager.set_state(user_id, "menu_status", group_id=rules[0]["group_id"])
                 await _reply_image(bot, user_id, _render_rule_with_menu(rules[0]), title=f"群 {rules[0]['group_id']}")
             else:
                 # Multiple rules: show list without menu
@@ -625,151 +638,163 @@ async def _handle_session_input(bot: Bot, user_id: int, text: str) -> bool:
 
     Returns True if input was handled by session, False otherwise.
     """
-    session = _session_manager.get_state(user_id)
-    if not session:
+    async def _get_rule_or_fail(group_id: int) -> dict | None:
+        """Get rule by group_id, send error and clear session if not found."""
+        rule = find_rule(rules, group_id)
+        if not rule:
+            await _session_manager.clear_state(user_id)
+            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+        return rule
+
+    try:
+        # Check if user's previous session expired
+        if await _session_manager.check_and_clear_expired_flag(user_id):
+            await _reply_private(bot, user_id, "⏱️ 上次操作已超时，请重新开始")
+            return False
+
+        session = await _session_manager.get_state(user_id)
+        if not session:
+            return False
+
+        state = session["state"]
+        rules = _load_rules_from_file()
+
+        # Handle menu selection
+        if state == "menu_status":
+            group_id = session["group_id"]
+            rule = await _get_rule_or_fail(group_id)
+            if not rule:
+                return True
+
+            if text == "1":
+                # Add keyword
+                await _session_manager.set_state(user_id, "awaiting_keyword_add", group_id=group_id)
+                await _reply_private(bot, user_id, "请输入要添加的关键词：")
+                return True
+            elif text == "2":
+                # Delete keyword
+                if not rule["keywords"]:
+                    await _reply_private(bot, user_id, "当前没有关键词")
+                    await _session_manager.clear_state(user_id)
+                    return True
+                await _session_manager.set_state(user_id, "awaiting_keyword_remove", group_id=group_id)
+                kw_list = "\n".join(f"{i}. {kw['word']}" for i, kw in enumerate(rule["keywords"], 1))
+                await _reply_private(bot, user_id, f"请输入要删除的关键词编号：\n{kw_list}")
+                return True
+            elif text == "3":
+                # Toggle keyword enable/disable
+                if not rule["keywords"]:
+                    await _reply_private(bot, user_id, "当前没有关键词")
+                    await _session_manager.clear_state(user_id)
+                    return True
+                await _session_manager.set_state(user_id, "awaiting_keyword_toggle", group_id=group_id)
+                kw_list = "\n".join(
+                    f"{i}. {kw['word']} {'✅' if kw.get('enabled', True) else '⛔'}"
+                    for i, kw in enumerate(rule["keywords"], 1)
+                )
+                await _reply_private(bot, user_id, f"请输入要切换状态的关键词编号：\n{kw_list}")
+                return True
+            elif text == "4":
+                # Show stats
+                await _session_manager.clear_state(user_id)
+                today = time.strftime("%Y-%m-%d")
+                today_hits = [(k.split(":", 2)[-1], v) for k, v in _keyword_stats.items() if k.startswith(today)]
+                if not today_hits:
+                    await _reply_private(bot, user_id, "今日暂无命中统计")
+                    return True
+                today_hits.sort(key=lambda x: -x[1])
+                lines = [f"📊 今日关键词统计 · {today}", ""]
+                lines.extend(f"  ▸ {word}  {count}次" for word, count in today_hits)
+                await _reply_private(bot, user_id, "\n".join(lines))
+                return True
+            elif text == "5":
+                # Random quote
+                await _session_manager.clear_state(user_id)
+                await _reply_private(bot, user_id, f"📖 {await random_quote()}")
+                return True
+            else:
+                # Invalid option
+                await _reply_private(bot, user_id, "❌ 无效选项，请输入 1-5")
+                return True
+
+        # Handle keyword add
+        elif state == "awaiting_keyword_add":
+            group_id = session["group_id"]
+            rule = await _get_rule_or_fail(group_id)
+            if not rule:
+                return True
+
+            keyword = text.strip()
+            if not keyword:
+                await _reply_private(bot, user_id, "❌ 关键词不能为空")
+                return True
+
+            if not any(kw["word"] == keyword for kw in rule["keywords"]):
+                rule["keywords"].append({"word": keyword, "enabled": True})
+                _save_rules_file(upsert_rule(rules, rule))
+
+            await _session_manager.clear_state(user_id)
+            await _reply_image(bot, user_id, f"✅ 已添加关键词 \"{keyword}\"\n\n{_render_rule(rule)}", title=f"群 {group_id}")
+            return True
+
+        # Handle keyword remove
+        elif state == "awaiting_keyword_remove":
+            group_id = session["group_id"]
+            rule = await _get_rule_or_fail(group_id)
+            if not rule:
+                return True
+
+            try:
+                idx = int(text.strip())
+            except ValueError:
+                await _reply_private(bot, user_id, "❌ 请输入有效的数字")
+                return True
+
+            if 1 <= idx <= len(rule["keywords"]):
+                removed = rule["keywords"].pop(idx - 1)
+                _save_rules_file(upsert_rule(rules, rule))
+                await _session_manager.clear_state(user_id)
+                await _reply_image(bot, user_id, f"✅ 已删除关键词 \"{removed['word']}\"\n\n{_render_rule(rule)}", title=f"群 {group_id}")
+            else:
+                await _reply_private(bot, user_id, f"❌ 编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
+            return True
+
+        # Handle keyword toggle
+        elif state == "awaiting_keyword_toggle":
+            group_id = session["group_id"]
+            rule = await _get_rule_or_fail(group_id)
+            if not rule:
+                return True
+
+            try:
+                idx = int(text.strip())
+            except ValueError:
+                await _reply_private(bot, user_id, "❌ 请输入有效的数字")
+                return True
+
+            if 1 <= idx <= len(rule["keywords"]):
+                kw = rule["keywords"][idx - 1]
+                kw["enabled"] = not kw.get("enabled", True)
+                _save_rules_file(upsert_rule(rules, rule))
+                status = "已启用" if kw["enabled"] else "已禁用"
+                await _session_manager.clear_state(user_id)
+                await _reply_image(bot, user_id, f"✅ {status}关键词 \"{kw['word']}\"\n\n{_render_rule(rule)}", title=f"群 {group_id}")
+            else:
+                await _reply_private(bot, user_id, f"❌ 编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
+            return True
+
         return False
 
-    state = session["state"]
-    rules = _load_rules_from_file()
-
-    # Handle menu selection
-    if state == "menu_status":
-        group_id = session["group_id"]
-        rule = find_rule(rules, group_id)
-        if not rule:
-            _session_manager.clear_state(user_id)
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
-            return True
-
-        if text == "1":
-            # Add keyword
-            _session_manager.set_state(user_id, "awaiting_keyword_add", group_id=group_id)
-            await _reply_private(bot, user_id, "请输入要添加的关键词：")
-            return True
-        elif text == "2":
-            # Delete keyword
-            if not rule["keywords"]:
-                await _reply_private(bot, user_id, "当前没有关键词")
-                _session_manager.clear_state(user_id)
-                return True
-            _session_manager.set_state(user_id, "awaiting_keyword_remove", group_id=group_id)
-            kw_list = "\n".join(f"{i}. {kw['word']}" for i, kw in enumerate(rule["keywords"], 1))
-            await _reply_private(bot, user_id, f"请输入要删除的关键词编号：\n{kw_list}")
-            return True
-        elif text == "3":
-            # Toggle keyword enable/disable
-            if not rule["keywords"]:
-                await _reply_private(bot, user_id, "当前没有关键词")
-                _session_manager.clear_state(user_id)
-                return True
-            _session_manager.set_state(user_id, "awaiting_keyword_toggle", group_id=group_id)
-            kw_list = "\n".join(
-                f"{i}. {kw['word']} {'✅' if kw.get('enabled', True) else '⛔'}"
-                for i, kw in enumerate(rule["keywords"], 1)
-            )
-            await _reply_private(bot, user_id, f"请输入要切换状态的关键词编号：\n{kw_list}")
-            return True
-        elif text == "4":
-            # Show stats
-            _session_manager.clear_state(user_id)
-            today = time.strftime("%Y-%m-%d")
-            today_hits = [(k.split(":", 2)[-1], v) for k, v in _keyword_stats.items() if k.startswith(today)]
-            if not today_hits:
-                await _reply_private(bot, user_id, "今日暂无命中统计")
-                return True
-            today_hits.sort(key=lambda x: -x[1])
-            lines = [f"📊 今日关键词统计 · {today}", ""]
-            lines.extend(f"  ▸ {word}  {count}次" for word, count in today_hits)
-            await _reply_private(bot, user_id, "\n".join(lines))
-            return True
-        elif text == "5":
-            # Random quote
-            _session_manager.clear_state(user_id)
-            await _reply_private(bot, user_id, f"📖 {await random_quote()}")
-            return True
-        else:
-            # Invalid option
-            await _reply_private(bot, user_id, "❌ 无效选项，请输入 1-5")
-            return True
-
-    # Handle keyword add
-    elif state == "awaiting_keyword_add":
-        group_id = session["group_id"]
-        rule = find_rule(rules, group_id)
-        if not rule:
-            _session_manager.clear_state(user_id)
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
-            return True
-
-        keyword = text.strip()
-        if not keyword:
-            await _reply_private(bot, user_id, "❌ 关键词不能为空")
-            return True
-
-        if not any(kw["word"] == keyword for kw in rule["keywords"]):
-            rule["keywords"].append({"word": keyword, "enabled": True})
-            _save_rules_file(upsert_rule(rules, rule))
-
-        _session_manager.clear_state(user_id)
-        await _reply_image(bot, user_id, f"✅ 已添加关键词 \"{keyword}\"\n\n{_render_rule(rule)}", title=f"群 {group_id}")
+    except Exception as e:
+        logger.error("Session input handling failed for user %s: %s", user_id, e, exc_info=True)
+        await _session_manager.clear_state(user_id)
+        await _reply_private(bot, user_id, "❌ 操作失败，会话已重置。请重新开始。")
         return True
-
-    # Handle keyword remove
-    elif state == "awaiting_keyword_remove":
-        group_id = session["group_id"]
-        rule = find_rule(rules, group_id)
-        if not rule:
-            _session_manager.clear_state(user_id)
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
-            return True
-
-        try:
-            idx = int(text.strip())
-        except ValueError:
-            await _reply_private(bot, user_id, "❌ 请输入有效的数字")
-            return True
-
-        if 1 <= idx <= len(rule["keywords"]):
-            removed = rule["keywords"].pop(idx - 1)
-            _save_rules_file(upsert_rule(rules, rule))
-            _session_manager.clear_state(user_id)
-            await _reply_image(bot, user_id, f"✅ 已删除关键词 \"{removed['word']}\"\n\n{_render_rule(rule)}", title=f"群 {group_id}")
-        else:
-            await _reply_private(bot, user_id, f"❌ 编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
-        return True
-
-    # Handle keyword toggle
-    elif state == "awaiting_keyword_toggle":
-        group_id = session["group_id"]
-        rule = find_rule(rules, group_id)
-        if not rule:
-            _session_manager.clear_state(user_id)
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
-            return True
-
-        try:
-            idx = int(text.strip())
-        except ValueError:
-            await _reply_private(bot, user_id, "❌ 请输入有效的数字")
-            return True
-
-        if 1 <= idx <= len(rule["keywords"]):
-            kw = rule["keywords"][idx - 1]
-            kw["enabled"] = not kw.get("enabled", True)
-            _save_rules_file(upsert_rule(rules, rule))
-            status = "已启用" if kw["enabled"] else "已禁用"
-            _session_manager.clear_state(user_id)
-            await _reply_image(bot, user_id, f"✅ {status}关键词 \"{kw['word']}\"\n\n{_render_rule(rule)}", title=f"群 {group_id}")
-        else:
-            await _reply_private(bot, user_id, f"❌ 编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
-        return True
-
-    return False
 
 
 # --- main dispatch ---
 
-COMMANDS = {"status", "add", "remove", "set", "on", "off", "disable", "enable", "stats", "quote", "help", "h", "rule", "remind"}
+COMMANDS = {"status", "add", "remove", "set", "on", "off", "disable", "enable", "stats", "quote", "help", "h", "rule", "remind", "cancel"}
 
 
 @admin_matcher.handle()
@@ -785,7 +810,7 @@ async def handle_admin_command(bot: Bot, event: PrivateMessageEvent) -> None:
 
     # If user types a command while in session, clear session and process command
     if first_word in COMMANDS:
-        _session_manager.clear_state(event.user_id)
+        await _session_manager.clear_state(event.user_id)
     else:
         # Check if user has active session state
         if await _handle_session_input(bot, event.user_id, text):
@@ -810,9 +835,9 @@ try:
     from nonebot_plugin_apscheduler import scheduler
 
     @scheduler.scheduled_job("interval", minutes=10, id="cleanup_sessions")
-    def cleanup_expired_sessions() -> None:
+    async def cleanup_expired_sessions() -> None:
         """Clean up expired user sessions every 10 minutes."""
-        count = _session_manager.cleanup_expired()
+        count = await _session_manager.cleanup_expired()
         if count > 0:
             logger.info("Cleaned up %d expired sessions", count)
 except ImportError:
