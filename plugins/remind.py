@@ -36,7 +36,7 @@ def _render_reminder(rem: dict) -> str:
         label = f"{rem['hour']:02d}:{rem['minute']:02d} {REMIND_TYPE_LABELS.get(rem_type, '')}"
     lines.append(f"⏰ {label}")
     if rem.get("auto_generate") == "quote":
-        lines.append("📝 [每日一言] 每次触发随机生成")
+        lines.append("📝 每日一言 · 每次触发随机生成")
     else:
         lines.append(f"📝 {rem['message']}")
     if rem_type == "period" and rem.get("last_done_date") == date.today().isoformat():
@@ -175,7 +175,7 @@ async def _fire(rem_id: int) -> None:
         label = REMIND_TYPE_LABELS.get(rem_type, "")
         text = f"⏰ {rem['message']}"
         if label:
-            text = f"⏰ [{label}] {rem['message']}"
+            text = f"⏰ {label} · {rem['message']}"
 
     targets = rem.get("targets", [])
     if not targets:
@@ -222,7 +222,7 @@ async def _fire_period_interval(rem_id: int) -> None:
         return
 
     bot = bots[0]
-    text = f"🔔 [周期催促] {rem['message']}"
+    text = f"🔔 周期催促 · {rem['message']}"
 
     targets = rem.get("targets", [])
     if not targets:

@@ -433,7 +433,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
     extra_parts: list[str] = []
     image_count = sum(1 for seg in event.message if seg.type == "image")
     if image_count:
-        extra_parts.append(f"[图片×{image_count}]")
+        extra_parts.append(f"📷 图片×{image_count}")
     for seg in event.message:
         if seg.type == "at":
             qq = seg.data.get("qq", "")
@@ -665,7 +665,8 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             rule["keywords"][idx - 1]["enabled"] = command == "enable"
             _save_rules_file(upsert_rule(rules, rule))
             status = "已启用" if command == "enable" else "已禁用"
-            await _reply_image(bot, user_id, f"{status}关键词 [{idx}] {rule['keywords'][idx - 1]['word']}\n{_render_rule(rule)}", title=f"群 {group_id}")
+            kw_name = rule['keywords'][idx - 1]['word']
+            await _reply_image(bot, user_id, f"✅ {status}关键词: {kw_name}\n\n{_render_rule(rule)}", title=f"群 {group_id}")
         else:
             await _reply_private(bot, user_id, f"编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
         return
