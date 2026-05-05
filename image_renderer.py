@@ -11,12 +11,12 @@ from PIL import Image, ImageDraw, ImageFont
 CARD_WIDTH = 860
 PADDING = 28
 TITLE_HEIGHT = 56
-LINE_HEIGHT = 34
-HEADER_LINE_HEIGHT = 30
+LINE_HEIGHT = 36  # Increased for better spacing
+HEADER_LINE_HEIGHT = 32
 FONT_SIZE = 17
 TITLE_FONT_SIZE = 20
 HEADER_FONT_SIZE = 18
-COL2_X = 420  # X position for second column (command descriptions)
+COL2_X = 460  # Increased to prevent overlap with emoji
 CORNER_RADIUS = 14
 
 COLOR_BG = (255, 255, 255)
@@ -141,7 +141,8 @@ def render_text_to_image(text: str, title: str = "Bot") -> str:
         elif m := _TWO_COL_RE.match(line):
             col1, col2 = m.group(1), m.group(2)
             w1, _ = _measure(tmp, col1, font)
-            if PADDING + w1 + 20 <= COL2_X:
+            # More generous threshold for emoji and Chinese characters
+            if PADDING + w1 + 30 <= COL2_X:
                 entries.append((col1, "col2", col2))
             else:
                 sub = _wrap_text(tmp, line, font, content_width)
