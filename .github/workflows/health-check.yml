@@ -1,0 +1,79 @@
+name: Health Check
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check service health
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+
+            SERVICE_NAME="qq-forward-bot"
+            PROJECT_DIR="/home/ubuntu/Monitor"
+
+            echo "=== 服务健康检查 ==="
+            echo "时间: $(date '+%Y-%m-%d %H:%M:%S')"
+
+            # 检查服务状态
+            if sudo systemctl is-active "$SERVICE_NAME" --quiet; then
+              echo "✓ 服务运行中"
+
+              # 检查运行时长
+              UPTIME=$(sudo systemctl show "$SERVICE_NAME" --property=ActiveEnterTimestamp --value)
+              echo "启动时间: $UPTIME"
+
+              # 检查内存使用
+              MEMORY=$(sudo systemctl show "$SERVICE_NAME" --property=MemoryCurrent --value)
+              if [ "$MEMORY" != "[not set]" ]; then
+                MEMORY_MB=$((MEMORY / 1024 / 1024))
+                echo "内存使用: ${MEMORY_MB}MB"
+              fi
+
+              # 检查最近错误
+              ERROR_COUNT=$(sudo journalctl -u "$SERVICE_NAME" --since "6 hours ago" | grep -i "error\|exception" | grep -v "ERROR.*WebSocket.*关闭" | wc -l)
+              echo "最近6小时错误数: $ERROR_COUNT"
+
+              if [ "$ERROR_COUNT" -gt 10 ]; then
+                echo "⚠ 错误数量较多，请检查日志"
+                sudo journalctl -u "$SERVICE_NAME" -n 20 --no-pager
+                exit 1
+              fi
+
+              # 检查磁盘空间
+              DISK_USAGE=$(df -h "$PROJECT_DIR" | awk 'NR==2 {print $5}' | sed 's/%//')
+              echo "磁盘使用: ${DISK_USAGE}%"
+
+              if [ "$DISK_USAGE" -gt 80 ]; then
+                echo "⚠ 磁盘空间不足"
+                exit 1
+              fi
+
+              echo "✓ 健康检查通过"
+
+            else
+              echo "✗ 服务未运行"
+              echo "最近日志:"
+              sudo journalctl -u "$SERVICE_NAME" -n 30 --no-pager
+              exit 1
+            fi
+
+      - name: Health check result
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ 健康检查通过"
+          else
+            echo "❌ 健康检查失败"
+          fi
