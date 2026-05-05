@@ -336,7 +336,7 @@ def _build_admin_help() -> str:
 
 def _render_rule(rule: dict) -> str:
     kw_lines = "\n".join(
-        f"  [{i}] {kw['word']}{' ⛔' if not kw.get('enabled', True) else ''}"
+        f"  {i}. {kw['word']}{' ⛔' if not kw.get('enabled', True) else ''}"
         for i, kw in enumerate(rule["keywords"], 1)
     ) if rule["keywords"] else "  (无)"
     return (
@@ -573,7 +573,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
 
         if removed:
             _save_rules_file(upsert_rule(rules, rule))
-            removed_names = ", ".join(f"[{removed[i]['word']}]" for i in range(len(removed)))
+            removed_names = ", ".join(f"{kw['word']}" for kw in removed)
             msg = f"✅ 已删除 {len(removed)} 个关键词: {removed_names}\n\n{_render_rule(rule)}"
             if invalid:
                 msg = f"⚠️ 编号 {', '.join(map(str, invalid))} 不存在\n\n" + msg
