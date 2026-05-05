@@ -781,11 +781,15 @@ async def handle_admin_command(bot: Bot, event: PrivateMessageEvent) -> None:
     if not text:
         raise FinishedException
 
-    # Check if user has active session state
-    if await _handle_session_input(bot, event.user_id, text):
-        raise FinishedException
-
     first_word = text.split(maxsplit=1)[0].lower()
+
+    # If user types a command while in session, clear session and process command
+    if first_word in COMMANDS:
+        _session_manager.clear_state(event.user_id)
+    else:
+        # Check if user has active session state
+        if await _handle_session_input(bot, event.user_id, text):
+            raise FinishedException
 
     if first_word not in COMMANDS:
         raise FinishedException
