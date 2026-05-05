@@ -53,6 +53,10 @@ _keyword_stats: dict[str, int] = {}
 # Session manager for interactive menus (max 1000 concurrent sessions)
 _session_manager = SessionManager(timeout_seconds=300, max_sessions=1000)
 
+# Message buffer for merging forwards (group_id -> list of pending messages)
+_message_buffer: dict[int, list[dict]] = {}
+_buffer_timeout_seconds = 3  # Merge messages within 3 seconds
+
 
 def _check_keyword_cooldown(group_id: int, word: str) -> bool:
     key = f"{group_id}:{word}"
@@ -68,6 +72,73 @@ def _track_keyword_hit(group_id: int, word: str) -> None:
     today = time.strftime("%Y-%m-%d")
     key = f"{today}:{group_id}:{word}"
     _keyword_stats[key] = _keyword_stats.get(key, 0) + 1
+
+
+async def _flush_message_buffer(bot: Bot, group_id: int) -> None:
+    """Flush buffered messages for a group as merged forward message."""
+    if group_id not in _message_buffer or not _message_buffer[group_id]:
+        return
+
+    messages = _message_buffer.pop(group_id)
+    if not messages:
+        return
+
+    # Get targets from the first message's rule
+    targets = messages[0]["targets"]
+
+    if len(messages) == 1:
+        # Single message: send directly
+        msg = messages[0]
+        for target_qq in targets:
+            await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=msg["text"])
+        logger.info("Forwarded single message from group %s", group_id)
+    else:
+        # Multiple messages: create merged forward
+        try:
+            # Build forward node list
+            nodes = []
+            for msg in messages:
+                nodes.append({
+                    "type": "node",
+                    "data": {
+                        "name": msg["sender_name"],
+                        "uin": msg["sender_id"],
+                        "content": msg["raw_text"]
+                    }
+                })
+
+            # Send to each target
+            for target_qq in targets:
+                await bot.call_api(
+                    "send_private_forward_msg",
+                    user_id=target_qq,
+                    messages=nodes
+                )
+
+            logger.info("Forwarded %d merged messages from group %s to %s", len(messages), group_id, targets)
+        except Exception as e:
+            logger.error("Failed to send merged forward: %s, falling back to individual messages", e)
+            # Fallback: send individually
+            for msg in messages:
+                for target_qq in targets:
+                    await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=msg["text"])
+
+
+async def _buffer_message(bot: Bot, group_id: int, message_data: dict) -> None:
+    """Buffer a message and schedule flush after timeout."""
+    import asyncio
+
+    if group_id not in _message_buffer:
+        _message_buffer[group_id] = []
+
+    _message_buffer[group_id].append(message_data)
+
+    # Schedule flush after timeout
+    async def _delayed_flush():
+        await asyncio.sleep(_buffer_timeout_seconds)
+        await _flush_message_buffer(bot, group_id)
+
+    asyncio.create_task(_delayed_flush())
 
 _rules_mtime: float | None = None
 _rules_cache: list[dict] = []
@@ -227,7 +298,9 @@ def _build_admin_help() -> str:
         "— 关键词监控 —\n"
         "status                      查看规则\n"
         "add <关键词>                添加关键词\n"
+        "add <词1,词2,词3>           批量添加\n"
         "remove <编号>               删除关键词\n"
+        "remove <编号1,编号2>        批量删除\n"
         "set <词1,词2>               替换全部关键词\n"
         "disable <编号>              临时禁用关键词\n"
         "enable <编号>               恢复禁用关键词\n"
@@ -256,21 +329,22 @@ def _build_admin_help() -> str:
         "— 其他 —\n"
         "cancel                              取消当前操作\n"
         "\n"
-        "💡 单群模式下关键词命令无需群号"
+        "💡 单群模式下关键词命令无需群号\n"
+        "💡 支持中英文逗号分隔批量操作"
     )
 
 
 def _render_rule(rule: dict) -> str:
     kw_lines = "\n".join(
-        f"  {i}. {kw['word']}{'' if kw.get('enabled', True) else ' ✗'}"
+        f"  [{i}] {kw['word']}{' ⛔' if not kw.get('enabled', True) else ''}"
         for i, kw in enumerate(rule["keywords"], 1)
-    ) if rule["keywords"] else "无"
+    ) if rule["keywords"] else "  (无)"
     return (
         f"群号: {rule['group_id']}\n"
         f"状态: {'✅ 启用' if rule['enabled'] else '⛔ 禁用'}\n"
         f"目标: {', '.join(map(str, rule['targets'])) or '无'}\n"
         f"正则: {'是' if rule['use_regex'] else '否'}\n"
-        f"─ 关键词 ─\n"
+        f"─ 关键词 ({len(rule['keywords'])} 个) ─\n"
         f"{kw_lines}"
     )
 
@@ -366,6 +440,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
             extra_parts.append(f"@{qq if qq != 'all' else '全体成员'}")
     extra = " ".join(extra_parts)
 
+    # Build formatted message for display
     forward_text = (
         f"🔍 关键词命中 · {msg_time}\n"
         f"─────────────────────\n"
@@ -377,10 +452,23 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
     if extra:
         forward_text += f"\n📎 {extra}"
 
-    for target_qq in rule["targets"]:
-        await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=forward_text)
+    # Build raw text for merged forward (simpler format)
+    raw_text = f"🎯 {', '.join(matched)}\n{text}"
+    if extra:
+        raw_text += f"\n📎 {extra}"
 
-    logger.info("Forwarded group message %s from %s to %s", event.message_id, event.group_id, rule["targets"])
+    # Buffer message for merging
+    message_data = {
+        "text": forward_text,
+        "raw_text": raw_text,
+        "sender_name": sender_name,
+        "sender_id": event.user_id,
+        "targets": rule["targets"],
+        "time": event.time
+    }
+
+    await _buffer_message(bot, event.group_id, message_data)
+    logger.info("Buffered message %s from group %s", event.message_id, event.group_id)
 
 
 # --- unified keyword/rule commands ---
@@ -441,38 +529,63 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
 
     if command == "remove":
         parts = text.split(maxsplit=2)
-        if len(parts) < 2 or not parts[1].strip().isdigit():
-            await _reply_private(bot, user_id, f"用法: remove [群号] <编号>\n使用 status 查看编号")
+        if len(parts) < 2:
+            await _reply_private(bot, user_id, f"用法: remove [群号] <编号>\n支持批量: remove 1,3,5\n使用 status 查看编号")
             return
-        if len(parts) > 2 and parts[2].strip().isdigit():
+
+        # Parse group_id and indices
+        if len(parts) > 2 and parts[1].strip().isdigit():
             group_id = int(parts[1])
-            idx = int(parts[2])
-        elif len(parts) > 2:
-            await _reply_private(bot, user_id, "编号必须是数字")
-            return
+            indices_str = parts[2]
         else:
-            idx = int(parts[1])
             if len(rules) != 1:
                 await _reply_private(bot, user_id, "存在多个群规则，请指定群号: remove <群号> <编号>")
                 return
             group_id = rules[0]["group_id"]
+            indices_str = parts[1]
 
         rule = find_rule(rules, group_id)
         if not rule:
             await _reply_private(bot, user_id, f"群 {group_id} 不存在")
             return
-        if 1 <= idx <= len(rule["keywords"]):
-            removed = rule["keywords"].pop(idx - 1)
+
+        # Parse indices (support comma-separated)
+        try:
+            indices = [int(x.strip()) for x in indices_str.replace("，", ",").split(",") if x.strip()]
+        except ValueError:
+            await _reply_private(bot, user_id, "❌ 编号必须是数字，多个编号用逗号分隔")
+            return
+
+        if not indices:
+            await _reply_private(bot, user_id, "❌ 请输入要删除的编号")
+            return
+
+        # Validate and remove (sort descending to avoid index shift)
+        indices = sorted(set(indices), reverse=True)
+        removed = []
+        invalid = []
+
+        for idx in indices:
+            if 1 <= idx <= len(rule["keywords"]):
+                removed.append(rule["keywords"].pop(idx - 1))
+            else:
+                invalid.append(idx)
+
+        if removed:
             _save_rules_file(upsert_rule(rules, rule))
-            await _reply_image(bot, user_id, f"已删除关键词 [{idx}] {removed['word']}\n{_render_rule(rule)}", title=f"群 {group_id}")
+            removed_names = ", ".join(f"[{removed[i]['word']}]" for i in range(len(removed)))
+            msg = f"✅ 已删除 {len(removed)} 个关键词: {removed_names}\n\n{_render_rule(rule)}"
+            if invalid:
+                msg = f"⚠️ 编号 {', '.join(map(str, invalid))} 不存在\n\n" + msg
+            await _reply_image(bot, user_id, msg, title=f"群 {group_id}")
         else:
-            await _reply_private(bot, user_id, f"编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
+            await _reply_private(bot, user_id, f"❌ 编号 {', '.join(map(str, invalid))} 不存在，当前共 {len(rule['keywords'])} 个关键词")
         return
 
     if command in {"add", "set"}:
         group_id_arg, keyword = _resolve_group_id(text)
         if not keyword:
-            await _reply_private(bot, user_id, f"用法: {command} [群号] <关键词>")
+            await _reply_private(bot, user_id, f"用法: {command} [群号] <关键词>\n支持批量: {command} 鞋子,裤子,衣服")
             return
         if group_id_arg is None and len(rules) != 1:
             await _reply_private(bot, user_id, f"存在多个群规则，请指定群号: {command} <群号> <关键词>")
@@ -483,18 +596,31 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             await _reply_private(bot, user_id, f"群 {group_id} 不存在")
             return
 
-        if command == "add":
-            if not any(kw["word"] == keyword for kw in rule["keywords"]):
-                rule["keywords"].append({"word": keyword, "enabled": True})
-                _save_rules_file(upsert_rule(rules, rule))
-        else:
-            rule["keywords"] = [
-                {"word": item.strip(), "enabled": True}
-                for item in keyword.replace("，", ",").split(",") if item.strip()
-            ]
-            _save_rules_file(upsert_rule(rules, rule))
+        # Parse keywords (support comma-separated)
+        keywords = [item.strip() for item in keyword.replace("，", ",").split(",") if item.strip()]
 
-        await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {group_id}")
+        if command == "add":
+            added = []
+            skipped = []
+            for kw in keywords:
+                if not any(k["word"] == kw for k in rule["keywords"]):
+                    rule["keywords"].append({"word": kw, "enabled": True})
+                    added.append(kw)
+                else:
+                    skipped.append(kw)
+
+            if added:
+                _save_rules_file(upsert_rule(rules, rule))
+                msg = f"✅ 已添加 {len(added)} 个关键词: {', '.join(added)}\n\n{_render_rule(rule)}"
+                if skipped:
+                    msg = f"⚠️ 已存在: {', '.join(skipped)}\n\n" + msg
+                await _reply_image(bot, user_id, msg, title=f"群 {group_id}")
+            else:
+                await _reply_private(bot, user_id, f"❌ 关键词已存在: {', '.join(skipped)}")
+        else:
+            rule["keywords"] = [{"word": kw, "enabled": True} for kw in keywords]
+            _save_rules_file(upsert_rule(rules, rule))
+            await _reply_image(bot, user_id, f"✅ 已替换为 {len(keywords)} 个关键词\n\n{_render_rule(rule)}", title=f"群 {group_id}")
         return
 
     if command == "stats":
