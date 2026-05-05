@@ -295,57 +295,77 @@ async def _reply_image(bot: Bot, user_id: int, text: str, title: str = "Bot") ->
 
 def _build_admin_help() -> str:
     return (
-        "— 关键词监控 —\n"
-        "status                      查看规则\n"
-        "add <关键词>                添加关键词\n"
-        "add <词1,词2,词3>           批量添加\n"
-        "remove <编号>               删除关键词\n"
-        "remove <编号1,编号2>        批量删除\n"
+        "▸ 关键词监控\n"
+        "status                      查看规则状态\n"
+        "add <关键词>                添加单个关键词\n"
+        "add <词1,词2,词3>           批量添加关键词\n"
+        "remove <编号>               删除指定关键词\n"
+        "remove <1,2,3>              批量删除关键词\n"
         "set <词1,词2>               替换全部关键词\n"
         "disable <编号>              临时禁用关键词\n"
         "enable <编号>               恢复禁用关键词\n"
-        "stats                       今日命中统计\n"
-        "quote                       随机励志名言\n"
+        "stats                       查看今日统计\n"
+        "quote                       获取随机名言\n"
         "on / off                    启用/禁用监听\n"
         "\n"
-        "— 定时提醒 —\n"
-        "remind <HH:MM> <内容>                   每天提醒\n"
-        "remind add <HH:MM> <内容>               每天提醒\n"
+        "▸ 定时提醒\n"
+        "remind <HH:MM> <内容>                   每天定时提醒\n"
+        "remind add <HH:MM> <内容>               每天定时提醒\n"
         "remind once <日期> <时间> <内容>        单次提醒\n"
         "remind workday <HH:MM> <内容>           工作日提醒\n"
         "remind interval <分钟> <内容>           间隔提醒\n"
         "remind period <时间> <分钟> <内容>      周期催促\n"
         "remind quote <HH:MM>                    每日一言\n"
-        "remind done <编号>                      标记完成\n"
+        "remind done <编号>                      标记今日完成\n"
         "remind remove <编号>                    删除提醒\n"
-        "remind list                             查看提醒\n"
+        "remind list                             查看所有提醒\n"
         "\n"
-        "— 高级管理 (多群) —\n"
+        "▸ 高级管理\n"
         "rule addgroup <群号>                添加群规则\n"
         "rule delgroup <群号>                删除群规则\n"
         "rule addtarget <群号> <QQ>          添加转发目标\n"
         "rule deltarget <群号> <QQ>          删除转发目标\n"
         "\n"
-        "— 其他 —\n"
-        "cancel                              取消当前操作\n"
-        "\n"
-        "💡 单群模式下关键词命令无需群号\n"
-        "💡 支持中英文逗号分隔批量操作"
+        "💡 提示\n"
+        "• 单群模式下关键词命令无需群号\n"
+        "• 支持中英文逗号分隔批量操作\n"
+        "• 回复 cancel 可取消当前操作"
     )
 
 
 def _render_rule(rule: dict) -> str:
-    kw_lines = "\n".join(
-        f"  {i}. {kw['word']}{' ⛔' if not kw.get('enabled', True) else ''}"
-        for i, kw in enumerate(rule["keywords"], 1)
-    ) if rule["keywords"] else "  (无)"
+    """Render rule with modern formatting."""
+    # Status badge
+    status_badge = "✅ 已启用" if rule['enabled'] else "⛔ 已禁用"
+
+    # Keywords section
+    if rule["keywords"]:
+        enabled_kws = [kw for kw in rule["keywords"] if kw.get('enabled', True)]
+        disabled_kws = [kw for kw in rule["keywords"] if not kw.get('enabled', True)]
+
+        kw_lines = []
+        for i, kw in enumerate(rule["keywords"], 1):
+            status_icon = "✓" if kw.get('enabled', True) else "✗"
+            kw_lines.append(f"  {i}. {status_icon} {kw['word']}")
+
+        kw_summary = f"{len(enabled_kws)} 个启用"
+        if disabled_kws:
+            kw_summary += f" · {len(disabled_kws)} 个禁用"
+
+        kw_section = "\n".join(kw_lines)
+    else:
+        kw_summary = "暂无关键词"
+        kw_section = "  (空)"
+
     return (
+        f"▸ 群组信息\n"
         f"群号: {rule['group_id']}\n"
-        f"状态: {'✅ 启用' if rule['enabled'] else '⛔ 禁用'}\n"
-        f"目标: {', '.join(map(str, rule['targets'])) or '无'}\n"
-        f"正则: {'是' if rule['use_regex'] else '否'}\n"
-        f"─ 关键词 ({len(rule['keywords'])} 个) ─\n"
-        f"{kw_lines}"
+        f"状态: {status_badge}\n"
+        f"转发目标: {', '.join(map(str, rule['targets'])) or '未设置'}\n"
+        f"正则匹配: {'开启' if rule['use_regex'] else '关闭'}\n"
+        f"\n"
+        f"▸ 关键词列表 ({kw_summary})\n"
+        f"{kw_section}"
     )
 
 
@@ -354,13 +374,11 @@ def _render_rule_with_menu(rule: dict) -> str:
     base = _render_rule(rule)
     menu = (
         "\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "📋 快捷操作\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
+        "▸ 快捷操作菜单\n"
         "1️⃣  添加关键词\n"
         "2️⃣  删除关键词\n"
-        "3️⃣  禁用/启用关键词\n"
-        "4️⃣  查看统计\n"
+        "3️⃣  切换启用状态\n"
+        "4️⃣  查看今日统计\n"
         "5️⃣  获取随机名言\n"
         "\n"
         "💡 回复数字选择操作\n"
@@ -627,12 +645,29 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         today = time.strftime("%Y-%m-%d")
         today_hits = [(k.split(":", 2)[-1], v) for k, v in _keyword_stats.items() if k.startswith(today)]
         if not today_hits:
-            await _reply_private(bot, user_id, "今日暂无命中统计")
+            await _reply_private(bot, user_id, "📊 今日暂无关键词命中记录")
             return
         today_hits.sort(key=lambda x: -x[1])
-        lines = [f"📊 今日关键词统计 · {today}", ""]
-        lines.extend(f"  ▸ {word}  {count}次" for word, count in today_hits)
-        await _reply_private(bot, user_id, "\n".join(lines))
+
+        total_hits = sum(count for _, count in today_hits)
+        lines = [
+            f"▸ 今日统计 ({today})",
+            f"总命中: {total_hits} 次 · 关键词: {len(today_hits)} 个",
+            ""
+        ]
+
+        # Top keywords with ranking
+        for i, (word, count) in enumerate(today_hits[:20], 1):
+            if i <= 3:
+                medal = ["🥇", "🥈", "🥉"][i - 1]
+                lines.append(f"{medal} {word}   {count} 次")
+            else:
+                lines.append(f"  {i}. {word}   {count} 次")
+
+        if len(today_hits) > 20:
+            lines.append(f"\n... 还有 {len(today_hits) - 20} 个关键词")
+
+        await _reply_image(bot, user_id, "\n".join(lines), title="今日统计")
         return
 
     if command == "quote":
@@ -827,11 +862,29 @@ async def _handle_session_input(bot: Bot, user_id: int, text: str) -> bool:
                 today = time.strftime("%Y-%m-%d")
                 today_hits = [(k.split(":", 2)[-1], v) for k, v in _keyword_stats.items() if k.startswith(today)]
                 if not today_hits:
-                    await _reply_private(bot, user_id, "今日暂无命中统计")
+                    await _reply_private(bot, user_id, "📊 今日暂无关键词命中记录")
                     return True
                 today_hits.sort(key=lambda x: -x[1])
-                lines = [f"📊 今日关键词统计 · {today}", ""]
-                lines.extend(f"  ▸ {word}  {count}次" for word, count in today_hits)
+
+                total_hits = sum(count for _, count in today_hits)
+                lines = [
+                    f"▸ 今日统计 ({today})",
+                    f"总命中: {total_hits} 次 · 关键词: {len(today_hits)} 个",
+                    ""
+                ]
+
+                # Top keywords with ranking
+                for i, (word, count) in enumerate(today_hits[:20], 1):
+                    if i <= 3:
+                        medal = ["🥇", "🥈", "🥉"][i - 1]
+                        lines.append(f"{medal} {word}   {count} 次")
+                    else:
+                        lines.append(f"  {i}. {word}   {count} 次")
+
+                if len(today_hits) > 20:
+                    lines.append(f"\n... 还有 {len(today_hits) - 20} 个关键词")
+
+                await _reply_image(bot, user_id, "\n".join(lines), title="今日统计")
                 await _reply_private(bot, user_id, "\n".join(lines))
                 return True
             elif text == "5":

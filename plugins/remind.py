@@ -24,24 +24,38 @@ REMIND_TYPE_LABELS = {
 
 
 def _render_reminder(rem: dict) -> str:
-    lines = [f"📋 编号: {rem['id']}"]
+    """Render reminder with modern formatting."""
     rem_type = rem.get("type", "daily")
+    type_label = REMIND_TYPE_LABELS.get(rem_type, "每天")
+
+    # Build time/schedule label
     if rem_type == "once":
-        label = f"{rem.get('date', '')} {rem['hour']:02d}:{rem['minute']:02d}"
+        schedule = f"{rem.get('date', '')} {rem['hour']:02d}:{rem['minute']:02d}"
     elif rem_type == "interval":
-        label = f"每{rem['interval_minutes']}分钟"
+        schedule = f"每 {rem['interval_minutes']} 分钟"
     elif rem_type == "period":
-        label = f"{rem['hour']:02d}:{rem['minute']:02d} 每{rem['repeat_interval']}分钟 · 每天"
+        schedule = f"{rem['hour']:02d}:{rem['minute']:02d} 起，每 {rem['repeat_interval']} 分钟"
     else:
-        label = f"{rem['hour']:02d}:{rem['minute']:02d} {REMIND_TYPE_LABELS.get(rem_type, '')}"
-    lines.append(f"⏰ {label}")
+        schedule = f"{rem['hour']:02d}:{rem['minute']:02d}"
+
+    # Build content
     if rem.get("auto_generate") == "quote":
-        lines.append("📝 每日一言 · 每次触发随机生成")
+        content = "📖 每日一言（自动生成）"
     else:
-        lines.append(f"📝 {rem['message']}")
+        content = f"📝 {rem['message']}"
+
+    # Build status
+    status = ""
     if rem_type == "period" and rem.get("last_done_date") == date.today().isoformat():
-        lines.append("✅ 状态: 今日已完成")
-    return "\n".join(lines)
+        status = "\n✅ 今日已完成"
+
+    return (
+        f"▸ 提醒 #{rem['id']}\n"
+        f"类型: {type_label}\n"
+        f"时间: {schedule}\n"
+        f"{content}"
+        f"{status}"
+    )
 
 
 async def _reply(bot: Bot, user_id: int, message: str) -> None:
