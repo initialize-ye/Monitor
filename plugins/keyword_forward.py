@@ -59,6 +59,8 @@ _buffer_timeout_seconds = 3  # Merge messages within 3 seconds
 
 
 def _check_keyword_cooldown(group_id: int, word: str) -> bool:
+    if group_id in _message_buffer_tasks:
+        return False
     key = f"{group_id}:{word}"
     now = time.time()
     last = _keyword_cooldown.get(key)
@@ -94,7 +96,7 @@ async def _flush_message_buffer(bot: Bot, group_id: int) -> None:
                 "data": {
                     "name": msg["sender_name"],
                     "uin": msg["sender_id"],
-                    "content": msg["raw_text"]
+                    "content": msg["content"]
                 }
             })
 
@@ -592,6 +594,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
     message_data = {
         "text": forward_text,
         "raw_text": raw_text,
+        "content": event.message,
         "sender_name": sender_name,
         "sender_id": event.user_id,
         "targets": rule["targets"],
