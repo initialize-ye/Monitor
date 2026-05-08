@@ -40,17 +40,17 @@ def _render_reminder(rem: dict) -> str:
 
     # Build content
     if rem.get("auto_generate") == "quote":
-        content = "📖 每日一言（自动生成）"
+        content = "每日一言（自动生成）"
     else:
-        content = f"📝 {rem['message']}"
+        content = f"{rem['message']}"
 
     # Build status
     status = ""
     if rem_type == "period" and rem.get("last_done_date") == date.today().isoformat():
-        status = "\n✅ 今日已完成"
+        status = "\n成功: 今日已完成"
 
     return (
-        f"▸ 提醒 #{rem['id']}\n"
+        f"提醒 #{rem['id']}\n"
         f"类型: {type_label}\n"
         f"时间: {schedule}\n"
         f"{content}"
@@ -122,7 +122,7 @@ def _should_resume_period_interval(rem: dict) -> bool:
 
 def _format_schedule_result(new_rem: dict, error: str | None) -> str:
     if error:
-        return f"⚠️ 提醒已保存，但调度失败: {error}\n\n{_render_reminder(new_rem)}"
+        return f"注意: 提醒已保存，但调度失败: {error}\n\n{_render_reminder(new_rem)}"
     return _render_reminder(new_rem)
 
 
@@ -232,15 +232,15 @@ async def _fire(rem_id: int) -> None:
     auto = rem.get("auto_generate", "")
 
     if auto == "quote":
-        text = f"📖 提醒 #{rem_id} · 每日一言\n{await random_quote()}"
+        text = f"提醒 #{rem_id} - 每日一言\n{await random_quote()}"
     else:
         label = REMIND_TYPE_LABELS.get(rem_type, "")
         if rem_type == "period":
-            text = f"🔔 提醒 #{rem_id} · 周期催促\n{rem['message']}\n\n完成后回复: remind done {rem_id}"
+            text = f"提醒 #{rem_id} - 周期催促\n{rem['message']}\n\n完成后回复: remind done {rem_id}"
         elif label:
-            text = f"⏰ 提醒 #{rem_id} · {label}\n{rem['message']}"
+            text = f"提醒 #{rem_id} - {label}\n{rem['message']}"
         else:
-            text = f"⏰ 提醒 #{rem_id}\n{rem['message']}"
+            text = f"提醒 #{rem_id}\n{rem['message']}"
 
     targets = rem.get("targets", [])
     if not targets:
@@ -287,7 +287,7 @@ async def _fire_period_interval(rem_id: int) -> None:
         return
 
     bot = bots[0]
-    text = f"🔔 提醒 #{rem_id} · 周期催促\n{rem['message']}\n\n完成后回复: remind done {rem_id}"
+    text = f"提醒 #{rem_id} - 周期催促\n{rem['message']}\n\n完成后回复: remind done {rem_id}"
 
     targets = rem.get("targets", [])
     if not targets:
@@ -493,24 +493,24 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
             await _reply(bot, user_id, f"编号 {rem_id} 不存在")
             return
         if target.get("type") != "period":
-            await _reply(bot, user_id, "⚠️ 该提醒不是周期催促类型")
+            await _reply(bot, user_id, "注意: 该提醒不是周期催促类型")
             return
 
         today = date.today().isoformat()
         if target.get("last_done_date") == today:
             _unschedule_period_interval(rem_id)
-            await _reply(bot, user_id, f"✅ 提醒 {rem_id} 今日已完成，无需重复标记")
+            await _reply(bot, user_id, f"成功: 提醒 {rem_id} 今日已完成，无需重复标记")
             return
 
         target["last_done_date"] = today
         try:
             save_reminders(reminders)
         except OSError as exc:
-            await _reply(bot, user_id, f"❌ 保存失败: {exc}")
+            await _reply(bot, user_id, f"错误: 保存失败: {exc}")
             return
 
         _unschedule_period_interval(rem_id)
-        await _reply(bot, user_id, f"✅ 已标记提醒 {rem_id} 今日完成，明天继续")
+        await _reply(bot, user_id, f"成功: 已标记提醒 {rem_id} 今日完成，明天继续")
         return
 
     if sub in {"remove", "del", "delete"}:
@@ -548,9 +548,9 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
             _unschedule(rem_id)
             _unschedule_period_interval(rem_id)
 
-        msg = f"🗑️ 已删除 {len(removed_ids)} 个提醒: {', '.join(map(str, removed_ids))}"
+        msg = f"已删除: 已删除 {len(removed_ids)} 个提醒: {', '.join(map(str, removed_ids))}"
         if missing_ids:
-            msg += f"\n⚠️ 编号不存在: {', '.join(map(str, missing_ids))}"
+            msg += f"\n注意: 编号不存在: {', '.join(map(str, missing_ids))}"
         await _reply(bot, user_id, msg)
         return
 
