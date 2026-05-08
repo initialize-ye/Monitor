@@ -517,35 +517,24 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> None:
         raise FinishedException
 
     sender_name = event.sender.card or event.sender.nickname or str(event.user_id)
-    msg_time = time.strftime("%m-%d %H:%M", time.localtime(event.time))
 
     # Check for images and @mentions
     extra_parts: list[str] = []
     image_count = sum(1 for seg in event.message if seg.type == "image")
     if image_count:
-        extra_parts.append(f"图片: 图片×{image_count}")
+        extra_parts.append(f"图片×{image_count}")
     for seg in event.message:
         if seg.type == "at":
             qq = seg.data.get("qq", "")
             extra_parts.append(f"@{qq if qq != 'all' else '全体成员'}")
     extra = " ".join(extra_parts)
 
-    # Build formatted message for display
-    forward_text = (
-        f"关键词命中 - {msg_time}\n"
-        f"---------------------\n"
-        f"发送者: {sender_name} ({event.user_id})\n"
-        f"命中: 命中: {', '.join(matched)}\n"
-        f"---------------------\n"
-        f"{text}"
-    )
+    forward_text = text
     if extra:
-        forward_text += f"\n附件: {extra}"
+        forward_text += f"\n{extra}"
 
-    # Build raw text for merged forward (simpler format)
-    raw_text = f"命中: {', '.join(matched)}\n{text}"
-    if extra:
-        raw_text += f"\n附件: {extra}"
+    # Merged forward content should stay the same as direct forwarding content.
+    raw_text = forward_text
 
     # Buffer message for merging
     message_data = {
