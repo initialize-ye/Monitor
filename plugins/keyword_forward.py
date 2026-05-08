@@ -86,42 +86,31 @@ async def _flush_message_buffer(bot: Bot, group_id: int) -> None:
     # Get targets from the first message's rule
     targets = messages[0]["targets"]
 
-    if len(messages) == 1:
-        # Single message: send directly
-        msg = messages[0]
+    try:
+        nodes = []
+        for msg in messages:
+            nodes.append({
+                "type": "node",
+                "data": {
+                    "name": msg["sender_name"],
+                    "uin": msg["sender_id"],
+                    "content": msg["raw_text"]
+                }
+            })
+
         for target_qq in targets:
-            await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=msg["text"])
-        logger.info("Forwarded single message from group %s", group_id)
-    else:
-        # Multiple messages: create merged forward
-        try:
-            # Build forward node list
-            nodes = []
-            for msg in messages:
-                nodes.append({
-                    "type": "node",
-                    "data": {
-                        "name": msg["sender_name"],
-                        "uin": msg["sender_id"],
-                        "content": msg["raw_text"]
-                    }
-                })
+            await bot.call_api(
+                "send_private_forward_msg",
+                user_id=target_qq,
+                messages=nodes
+            )
 
-            # Send to each target
+        logger.info("Forwarded %d messages as merged forward from group %s to %s", len(messages), group_id, targets)
+    except Exception as e:
+        logger.error("Failed to send merged forward: %s, falling back to individual messages", e)
+        for msg in messages:
             for target_qq in targets:
-                await bot.call_api(
-                    "send_private_forward_msg",
-                    user_id=target_qq,
-                    messages=nodes
-                )
-
-            logger.info("Forwarded %d merged messages from group %s to %s", len(messages), group_id, targets)
-        except Exception as e:
-            logger.error("Failed to send merged forward: %s, falling back to individual messages", e)
-            # Fallback: send individually
-            for msg in messages:
-                for target_qq in targets:
-                    await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=msg["text"])
+                await bot.call_api("send_msg", message_type="private", user_id=target_qq, message=msg["text"])
 
 
 async def _buffer_message(bot: Bot, group_id: int, message_data: dict) -> None:
