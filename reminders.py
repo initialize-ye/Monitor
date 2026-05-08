@@ -39,10 +39,11 @@ def save_reminders(reminders: list[dict]) -> None:
 
 
 def normalize_reminder(reminder: dict) -> dict:
-    rem_type = reminder.get("type", "daily")
+    raw_type = reminder.get("type", "daily")
+    rem_type = raw_type if raw_type in ("daily", "once", "workday", "interval", "period") else "daily"
     normalized = {
         "id": int(reminder["id"]),
-        "type": rem_type if rem_type in ("daily", "once", "workday", "interval", "period") else "daily",
+        "type": rem_type,
         "message": str(reminder.get("message", "")).strip(),
         "targets": sorted({int(item) for item in reminder.get("targets", [])}),
         "enabled": bool(reminder.get("enabled", True)),

@@ -73,9 +73,62 @@ async def _reply_image(bot: Bot, user_id: int, text: str, title: str = "提醒")
         await _reply(bot, user_id, text)
 
 
-def _schedule(rem: dict) -> None:
+def _parse_time(time_str: str) -> tuple[int | None, int | None, str | None]:
+    match = re.match(r"^(\d{1,2}):(\d{2})$", time_str.strip())
+    if not match:
+        return None, None, "时间格式错误，请使用 HH:MM（例如 09:00、18:30）"
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None, None, "时间范围错误：小时 0-23，分钟 0-59"
+    return hour, minute, None
+
+
+def _parse_id_list(raw: str) -> tuple[list[int], str | None]:
+    parts = [item.strip() for item in raw.replace("，", ",").split(",") if item.strip()]
+    if not parts:
+        return [], "请输入提醒编号"
+    try:
+        ids = [int(item) for item in parts]
+    except ValueError:
+        return [], "编号必须是数字，多个编号用逗号分隔"
+    return sorted(set(ids)), None
+
+
+def _schedule_period_interval(rem_id: int, interval_minutes: int) -> tuple[bool, str | None]:
+    try:
+        from nonebot_plugin_apscheduler import scheduler
+        scheduler.add_job(
+            _fire_period_interval, "interval",
+            minutes=interval_minutes,
+            id=f"period_interval_{rem_id}", replace_existing=True,
+            args=[rem_id], timezone=TZ,
+        )
+        logger.info("Scheduled period interval for reminder %s", rem_id)
+        return True, None
+    except Exception as exc:
+        logger.error("Failed to schedule period interval %s: %s", rem_id, exc)
+        return False, str(exc)
+
+
+def _should_resume_period_interval(rem: dict) -> bool:
+    if rem.get("type") != "period" or not rem.get("enabled", True):
+        return False
+    if rem.get("last_done_date") == date.today().isoformat():
+        return False
+    now = datetime.now()
+    start = now.replace(hour=int(rem.get("hour", 9)), minute=int(rem.get("minute", 0)), second=0, microsecond=0)
+    return now >= start
+
+
+def _format_schedule_result(new_rem: dict, error: str | None) -> str:
+    if error:
+        return f"⚠️ 提醒已保存，但调度失败: {error}\n\n{_render_reminder(new_rem)}"
+    return _render_reminder(new_rem)
+
+
+def _schedule(rem: dict) -> tuple[bool, str | None]:
     if not rem["enabled"]:
-        return
+        return True, None
     try:
         from nonebot_plugin_apscheduler import scheduler
         job_id = f"remind_{rem['id']}"
@@ -83,8 +136,8 @@ def _schedule(rem: dict) -> None:
 
         if rem_type == "once":
             if rem.get("fired"):
-                return
-            run_date = datetime.strptime(f"{rem['date']} {rem['hour']}:{rem['minute']}", "%Y-%m-%d %H:%M")
+                return True, None
+            run_date = datetime.strptime(f"{rem['date']} {int(rem['hour']):02d}:{int(rem['minute']):02d}", "%Y-%m-%d %H:%M")
             scheduler.add_job(
                 _fire, "date", run_date=run_date,
                 id=job_id, replace_existing=True, args=[rem["id"]], timezone=TZ,
@@ -112,8 +165,10 @@ def _schedule(rem: dict) -> None:
 
         _scheduled_jobs[rem["id"]] = job_id
         logger.info("Scheduled reminder %s (%s)", rem["id"], rem_type)
+        return True, None
     except Exception as exc:
         logger.error("Failed to schedule reminder %s: %s", rem["id"], exc)
+        return False, str(exc)
 
 
 def _unschedule(rem_id: int) -> None:
@@ -163,16 +218,9 @@ async def _fire(rem_id: int) -> None:
         if rem.get("last_done_date") == today:
             logger.info("Period reminder %s already done today, skipping", rem_id)
             return
-        from nonebot_plugin_apscheduler import scheduler
-        interval_id = f"period_interval_{rem_id}"
-        if not scheduler.get_job(interval_id):
-            scheduler.add_job(
-                _fire_period_interval, "interval",
-                minutes=rem["repeat_interval"],
-                id=interval_id, replace_existing=True,
-                args=[rem_id], timezone=TZ,
-            )
-            logger.info("Scheduled period interval for reminder %s", rem_id)
+        ok, error = _schedule_period_interval(rem_id, rem["repeat_interval"])
+        if not ok:
+            logger.error("Failed to start period interval for reminder %s: %s", rem_id, error)
 
     bots = list(driver.bots.values())
     if not bots:
@@ -184,12 +232,15 @@ async def _fire(rem_id: int) -> None:
     auto = rem.get("auto_generate", "")
 
     if auto == "quote":
-        text = f"📖 {await random_quote()}"
+        text = f"📖 提醒 #{rem_id} · 每日一言\n{await random_quote()}"
     else:
         label = REMIND_TYPE_LABELS.get(rem_type, "")
-        text = f"⏰ {rem['message']}"
-        if label:
-            text = f"⏰ {label} · {rem['message']}"
+        if rem_type == "period":
+            text = f"🔔 提醒 #{rem_id} · 周期催促\n{rem['message']}\n\n完成后回复: remind done {rem_id}"
+        elif label:
+            text = f"⏰ 提醒 #{rem_id} · {label}\n{rem['message']}"
+        else:
+            text = f"⏰ 提醒 #{rem_id}\n{rem['message']}"
 
     targets = rem.get("targets", [])
     if not targets:
@@ -236,7 +287,7 @@ async def _fire_period_interval(rem_id: int) -> None:
         return
 
     bot = bots[0]
-    text = f"🔔 周期催促 · {rem['message']}"
+    text = f"🔔 提醒 #{rem_id} · 周期催促\n{rem['message']}\n\n完成后回复: remind done {rem_id}"
 
     targets = rem.get("targets", [])
     if not targets:
@@ -257,16 +308,28 @@ def restore_all() -> None:
     except (RuntimeError, ValueError):
         logger.warning("No reminders to restore")
         return
+    restored = 0
+    interval_restored = 0
     for rem in reminders:
         rem = normalize_reminder(rem)
-        _schedule(rem)
+        ok, error = _schedule(rem)
+        if ok:
+            restored += 1
+        else:
+            logger.error("Failed to restore reminder %s: %s", rem.get("id"), error)
+        if _should_resume_period_interval(rem):
+            ok, error = _schedule_period_interval(rem["id"], rem["repeat_interval"])
+            if ok:
+                interval_restored += 1
+            else:
+                logger.error("Failed to restore period interval %s: %s", rem.get("id"), error)
     if reminders:
-        logger.info("Restored %d reminders", len(reminders))
+        logger.info("Restored %d reminders and %d period intervals", restored, interval_restored)
 
 
 async def handle_command(bot: Bot, user_id: int, text: str) -> None:
-    parts = text.split(maxsplit=4)
-    sub = parts[1].lower() if len(parts) > 1 else ""
+    head_parts = text.split(maxsplit=2)
+    sub = head_parts[1].lower() if len(head_parts) > 1 else ""
 
     if sub == "list":
         try:
@@ -282,10 +345,11 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         return
 
     if sub == "add":
-        await _add_daily(bot, user_id, parts)
+        await _add_daily(bot, user_id, text.split(maxsplit=3))
         return
 
     if sub == "quote":
+        parts = text.split(maxsplit=3)
         if len(parts) < 3 or not parts[2].strip():
             await _reply(bot, user_id, "用法: remind quote <HH:MM>\n例如: remind quote 09:00")
             return
@@ -297,6 +361,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
 
     if sub == "once":
         # remind once <YYYY-MM-DD> <HH:MM> <内容>
+        parts = text.split(maxsplit=4)
         if len(parts) < 5 or not parts[2].strip() or not parts[3].strip() or not parts[4].strip():
             await _reply(bot, user_id, "用法: remind once <YYYY-MM-DD> <HH:MM> <内容>\n例如: remind once 2025-12-25 10:00 圣诞节快乐")
             return
@@ -308,13 +373,13 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         except ValueError:
             await _reply(bot, user_id, "日期格式错误，请使用 YYYY-MM-DD")
             return
-        match = re.match(r"^(\d{1,2}):(\d{2})$", time_str)
-        if not match:
-            await _reply(bot, user_id, "时间格式错误，请使用 HH:MM")
+        hour, minute, error = _parse_time(time_str)
+        if error:
+            await _reply(bot, user_id, error)
             return
-        hour, minute = int(match.group(1)), int(match.group(2))
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            await _reply(bot, user_id, "时间范围错误")
+        run_at = datetime.strptime(f"{date_str} {hour:02d}:{minute:02d}", "%Y-%m-%d %H:%M")
+        if run_at <= datetime.now():
+            await _reply(bot, user_id, "单次提醒时间不能早于当前时间")
             return
         try:
             reminders = load_reminders()
@@ -337,12 +402,17 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         except OSError as exc:
             await _reply(bot, user_id, f"保存失败: {exc}")
             return
-        _schedule(new_rem)
-        await _reply_image(bot, user_id, f"已添加单次提醒\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
+        ok, error = _schedule(new_rem)
+        await _reply_image(
+            bot, user_id,
+            f"已添加单次提醒\n{_format_schedule_result(new_rem, error if not ok else None)}",
+            title=f"提醒 {new_rem['id']}"
+        )
         return
 
     if sub == "workday":
         # remind workday <HH:MM> <内容>
+        parts = text.split(maxsplit=3)
         if len(parts) < 4 or not parts[2].strip() or not parts[3].strip():
             await _reply(bot, user_id, "用法: remind workday <HH:MM> <内容>\n例如: remind workday 09:00 上班打卡")
             return
@@ -351,6 +421,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
 
     if sub == "interval":
         # remind interval <分钟> <内容>
+        parts = text.split(maxsplit=3)
         if len(parts) < 4 or not parts[2].strip() or not parts[3].strip():
             await _reply(bot, user_id, "用法: remind interval <分钟> <内容>\n例如: remind interval 30 起来活动一下")
             return
@@ -383,12 +454,17 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         except OSError as exc:
             await _reply(bot, user_id, f"保存失败: {exc}")
             return
-        _schedule(new_rem)
-        await _reply_image(bot, user_id, f"已添加间隔提醒\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
+        ok, error = _schedule(new_rem)
+        await _reply_image(
+            bot, user_id,
+            f"已添加间隔提醒\n{_format_schedule_result(new_rem, error if not ok else None)}",
+            title=f"提醒 {new_rem['id']}"
+        )
         return
 
     if sub == "period":
         # remind period <HH:MM> <间隔分钟> <内容>
+        parts = text.split(maxsplit=4)
         if len(parts) < 5 or not parts[2].strip() or not parts[3].strip() or not parts[4].strip():
             await _reply(bot, user_id, "用法: remind period <HH:MM> <间隔分钟> <内容>\n例如: remind period 18:00 10 背单词")
             return
@@ -396,6 +472,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         return
 
     if sub == "done":
+        parts = text.split(maxsplit=2)
         if len(parts) < 3 or not parts[2].strip():
             await _reply(bot, user_id, "用法: remind done <编号>\n例如: remind done 1")
             return
@@ -420,6 +497,11 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
             return
 
         today = date.today().isoformat()
+        if target.get("last_done_date") == today:
+            _unschedule_period_interval(rem_id)
+            await _reply(bot, user_id, f"✅ 提醒 {rem_id} 今日已完成，无需重复标记")
+            return
+
         target["last_done_date"] = today
         try:
             save_reminders(reminders)
@@ -432,13 +514,13 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         return
 
     if sub in {"remove", "del", "delete"}:
+        parts = text.split(maxsplit=2)
         if len(parts) < 3 or not parts[2].strip():
-            await _reply(bot, user_id, "用法: remind remove <编号>\n例如: remind remove 1")
+            await _reply(bot, user_id, "用法: remind remove <编号[,编号]>\n例如: remind remove 1,3")
             return
-        try:
-            rem_id = int(parts[2].strip())
-        except ValueError:
-            await _reply(bot, user_id, "编号必须是数字")
+        rem_ids, error = _parse_id_list(parts[2].strip())
+        if error:
+            await _reply(bot, user_id, error)
             return
 
         try:
@@ -447,25 +529,34 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
             await _reply(bot, user_id, f"加载提醒失败: {exc}")
             return
 
-        target = next((r for r in reminders if r["id"] == rem_id), None)
-        if not target:
-            await _reply(bot, user_id, f"编号 {rem_id} 不存在")
+        existing_ids = {r["id"] for r in reminders}
+        removed_ids = [rem_id for rem_id in rem_ids if rem_id in existing_ids]
+        missing_ids = [rem_id for rem_id in rem_ids if rem_id not in existing_ids]
+
+        if not removed_ids:
+            await _reply(bot, user_id, f"编号 {', '.join(map(str, missing_ids))} 不存在")
             return
 
-        reminders = [r for r in reminders if r["id"] != rem_id]
+        reminders = [r for r in reminders if r["id"] not in set(removed_ids)]
         try:
             save_reminders(reminders)
         except OSError as exc:
             await _reply(bot, user_id, f"保存失败: {exc}")
             return
 
-        _unschedule(rem_id)
-        _unschedule_period_interval(rem_id)
-        await _reply(bot, user_id, f"🗑️ 已删除提醒 {rem_id}")
+        for rem_id in removed_ids:
+            _unschedule(rem_id)
+            _unschedule_period_interval(rem_id)
+
+        msg = f"🗑️ 已删除 {len(removed_ids)} 个提醒: {', '.join(map(str, removed_ids))}"
+        if missing_ids:
+            msg += f"\n⚠️ 编号不存在: {', '.join(map(str, missing_ids))}"
+        await _reply(bot, user_id, msg)
         return
 
     # Shortcut: "remind HH:MM <内容>" → daily reminder without "add"
     if re.match(r"^\d{1,2}:\d{2}$", sub):
+        parts = text.split(maxsplit=2)
         if len(parts) < 3 or not parts[2].strip():
             await _reply(bot, user_id, "用法: remind <HH:MM> <内容>\n例如: remind 10:00 背单词")
             return
@@ -483,7 +574,7 @@ async def handle_command(bot: Bot, user_id: int, text: str) -> None:
         "remind period HH:MM <分钟> <内容>               周期催促(不做一直催)\n"
         "remind done <编号>                              标记周期催促今日完成\n"
         "remind quote HH:MM                              每日一言(随机名言)\n"
-        "remind remove <编号>                            删除提醒\n"
+        "remind remove <编号[,编号]>                     删除提醒\n"
         "remind list                                     查看提醒",
         title="提醒命令",
     )
@@ -499,13 +590,9 @@ async def _add_daily(bot: Bot, user_id: int, parts: list[str]) -> None:
 async def _add_timed(bot: Bot, user_id: int, parts: list[str], rem_type: str) -> None:
     time_str = parts[2].strip()
     message = parts[3].strip()
-    match = re.match(r"^(\d{1,2}):(\d{2})$", time_str)
-    if not match:
-        await _reply(bot, user_id, "时间格式错误，请使用 HH:MM（例如 10:00、08:30）")
-        return
-    hour, minute = int(match.group(1)), int(match.group(2))
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        await _reply(bot, user_id, "时间范围错误：小时 0-23，分钟 0-59")
+    hour, minute, error = _parse_time(time_str)
+    if error:
+        await _reply(bot, user_id, error)
         return
 
     try:
@@ -530,19 +617,19 @@ async def _add_timed(bot: Bot, user_id: int, parts: list[str], rem_type: str) ->
         await _reply(bot, user_id, f"保存失败: {exc}")
         return
 
-    _schedule(new_rem)
-    await _reply_image(bot, user_id, f"已添加提醒\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
+    ok, error = _schedule(new_rem)
+    await _reply_image(
+        bot, user_id,
+        f"已添加提醒\n{_format_schedule_result(new_rem, error if not ok else None)}",
+        title=f"提醒 {new_rem['id']}"
+    )
 
 
 async def _add_quote(bot: Bot, user_id: int, parts: list[str]) -> None:
     time_str = parts[2].strip()
-    match = re.match(r"^(\d{1,2}):(\d{2})$", time_str)
-    if not match:
-        await _reply(bot, user_id, "时间格式错误，请使用 HH:MM（例如 09:00、08:30）")
-        return
-    hour, minute = int(match.group(1)), int(match.group(2))
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        await _reply(bot, user_id, "时间范围错误：小时 0-23，分钟 0-59")
+    hour, minute, error = _parse_time(time_str)
+    if error:
+        await _reply(bot, user_id, error)
         return
 
     try:
@@ -567,8 +654,12 @@ async def _add_quote(bot: Bot, user_id: int, parts: list[str]) -> None:
         await _reply(bot, user_id, f"保存失败: {exc}")
         return
 
-    _schedule(new_rem)
-    await _reply_image(bot, user_id, f"已添加每日一言\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
+    ok, error = _schedule(new_rem)
+    await _reply_image(
+        bot, user_id,
+        f"已添加每日一言\n{_format_schedule_result(new_rem, error if not ok else None)}",
+        title=f"提醒 {new_rem['id']}"
+    )
 
 
 async def _add_period(bot: Bot, user_id: int, parts: list[str]) -> None:
@@ -583,13 +674,9 @@ async def _add_period(bot: Bot, user_id: int, parts: list[str]) -> None:
         return
     message = parts[4].strip()
 
-    match = re.match(r"^(\d{1,2}):(\d{2})$", time_str)
-    if not match:
-        await _reply(bot, user_id, "时间格式错误，请使用 HH:MM（例如 18:00、08:30）")
-        return
-    hour, minute = int(match.group(1)), int(match.group(2))
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        await _reply(bot, user_id, "时间范围错误：小时 0-23，分钟 0-59")
+    hour, minute, error = _parse_time(time_str)
+    if error:
+        await _reply(bot, user_id, error)
         return
 
     try:
@@ -615,8 +702,12 @@ async def _add_period(bot: Bot, user_id: int, parts: list[str]) -> None:
         await _reply(bot, user_id, f"保存失败: {exc}")
         return
 
-    _schedule(new_rem)
-    await _reply_image(bot, user_id, f"已添加周期催促提醒\n{_render_reminder(new_rem)}", title=f"提醒 {new_rem['id']}")
+    ok, error = _schedule(new_rem)
+    await _reply_image(
+        bot, user_id,
+        f"已添加周期催促提醒\n{_format_schedule_result(new_rem, error if not ok else None)}",
+        title=f"提醒 {new_rem['id']}"
+    )
 
 
 @driver.on_startup
