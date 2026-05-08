@@ -13,7 +13,6 @@ from nonebot.rule import is_type
 from rules import find_rule, load_rules, normalize_rule, save_rules, upsert_rule
 from .remind import handle_command as _handle_remind_command
 from image_renderer import render_text_to_image
-from quotes import random_quote
 from session_manager import SessionManager
 
 
@@ -361,7 +360,7 @@ def _menu_options_text() -> str:
         "2. 删除关键词\n"
         "3. 切换启用状态\n"
         "4. 查看今日统计\n"
-        "5. 获取随机名言\n"
+        "5. 设置每日一言\n"
         "回复 cancel 取消"
     )
 
@@ -378,7 +377,7 @@ def _build_admin_help() -> str:
         "disable <编号>              临时禁用关键词\n"
         "enable <编号>               恢复禁用关键词\n"
         "stats                       查看今日统计\n"
-        "quote                       获取随机名言\n"
+        "quote [HH:MM]               设置每日一言定时\n"
         "on / off                    启用/禁用监听\n"
         "\n"
         "▸ 定时提醒\n"
@@ -452,7 +451,7 @@ def _render_rule_with_menu(rule: dict) -> str:
         "2️⃣  删除关键词\n"
         "3️⃣  切换启用状态\n"
         "4️⃣  查看今日统计\n"
-        "5️⃣  获取随机名言\n"
+        "5️⃣  设置每日一言\n"
         "\n"
         "💡 回复数字选择操作\n"
         "💡 输入 cancel 取消操作"
@@ -733,7 +732,9 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         return
 
     if command == "quote":
-        await _reply_private(bot, user_id, f"📖 {await random_quote()}")
+        parts = text.split(maxsplit=1)
+        quote_time = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "09:00"
+        await _handle_remind_command(bot, user_id, f"remind quote {quote_time}")
         return
 
     if command in {"disable", "enable"}:
@@ -953,9 +954,9 @@ async def _handle_session_input(bot: Bot, user_id: int, text: str) -> bool:
                     await _reply_private(bot, user_id, stats_text)
                 return True
             elif text == "5":
-                # Random quote
+                # Schedule daily quote
                 await _session_manager.clear_state(user_id)
-                await _reply_private(bot, user_id, f"📖 {await random_quote()}")
+                await _handle_remind_command(bot, user_id, "remind quote 09:00")
                 return True
             else:
                 # Invalid option
