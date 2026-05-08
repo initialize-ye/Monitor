@@ -232,7 +232,7 @@ async def _fire(rem_id: int) -> None:
     auto = rem.get("auto_generate", "")
 
     if auto == "quote":
-        text = f"提醒 #{rem_id} - 每日一言\n{await random_quote()}"
+        text = await random_quote()
     else:
         label = REMIND_TYPE_LABELS.get(rem_type, "")
         if rem_type == "period":
@@ -245,6 +245,15 @@ async def _fire(rem_id: int) -> None:
     targets = rem.get("targets", [])
     if not targets:
         targets = [rem["creator_qq"]] if rem.get("creator_qq") else []
+
+    if auto == "quote":
+        for target_qq in targets:
+            try:
+                await _reply_image(bot, target_qq, text, title="每日一言")
+            except Exception as exc:
+                logger.error("Failed to send quote reminder %s to %s: %s", rem_id, target_qq, exc)
+        logger.info("Fired quote reminder %s", rem_id)
+        return
 
     # Period cron trigger: send as plain text
     if rem_type == "period":
