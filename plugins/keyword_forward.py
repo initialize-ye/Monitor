@@ -427,8 +427,8 @@ def _render_rule(rule: dict, index: int | None = None) -> str:
 
         kw_lines = []
         for i, kw in enumerate(rule["keywords"], 1):
-            status_icon = "启用" if kw.get('enabled', True) else "禁用"
-            kw_lines.append(f"  {i}. {status_icon} {kw['word']}")
+            suffix = " 停用" if not kw.get('enabled', True) else ""
+            kw_lines.append(f"  {i}. {kw['word']}{suffix}")
 
         kw_summary = f"{len(enabled_kws)} 个启用"
         if disabled_kws:
