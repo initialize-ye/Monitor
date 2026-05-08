@@ -502,13 +502,20 @@ def _rule_index(rules: list[dict], group_id: int) -> int | None:
     return next((i for i, rule in enumerate(rules, 1) if rule["group_id"] == group_id), None)
 
 
+def _clean_display_text(text: str) -> str:
+    text = re.sub(r"[\U0001F300-\U0001FAFF☀-➿]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or "未知"
+
+
 async def _annotate_group_names(bot: Bot, rules: list[dict]) -> list[dict]:
     annotated = []
     for rule in rules:
         item = dict(rule)
         try:
             info = await bot.call_api("get_group_info", group_id=rule["group_id"], no_cache=False)
-            item["group_name"] = info.get("group_name") or info.get("group_remark") or "未知"
+            raw_name = info.get("group_name") or info.get("group_remark") or "未知"
+            item["group_name"] = _clean_display_text(str(raw_name))
         except Exception as exc:
             logger.warning("Failed to get group name for %s: %s", rule["group_id"], exc)
             item["group_name"] = "未知"
