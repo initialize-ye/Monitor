@@ -54,6 +54,7 @@ _session_manager = SessionManager(timeout_seconds=300, max_sessions=1000)
 
 # Message buffer for merging forwards (group_id -> list of pending messages)
 _message_buffer: dict[int, list[dict]] = {}
+_message_buffer_tasks: set[int] = set()
 _buffer_timeout_seconds = 3  # Merge messages within 3 seconds
 
 
@@ -131,11 +132,17 @@ async def _buffer_message(bot: Bot, group_id: int, message_data: dict) -> None:
         _message_buffer[group_id] = []
 
     _message_buffer[group_id].append(message_data)
+    if group_id in _message_buffer_tasks:
+        return
 
-    # Schedule flush after timeout
+    _message_buffer_tasks.add(group_id)
+
     async def _delayed_flush():
-        await asyncio.sleep(_buffer_timeout_seconds)
-        await _flush_message_buffer(bot, group_id)
+        try:
+            await asyncio.sleep(_buffer_timeout_seconds)
+            await _flush_message_buffer(bot, group_id)
+        finally:
+            _message_buffer_tasks.discard(group_id)
 
     asyncio.create_task(_delayed_flush())
 
@@ -401,12 +408,6 @@ def _build_admin_help() -> str:
         "rule delgroup <编号|群号>            删除群规则，需要确认\n"
         "rule addtarget <编号|群号> <QQ>      添加转发目标\n"
         "rule deltarget <编号|群号> <QQ>      删除转发目标\n"
-        "\n"
-        "使用示例\n"
-        "status 1                             查看 1 号规则\n"
-        "add 1 鞋子,裤子                      给 1 号规则批量添加关键词\n"
-        "remove 1 2,3                         删除 1 号规则的 2、3 号关键词\n"
-        "remind period 18:00 10 背单词        18:00 开始每 10 分钟催促\n"
         "\n"
         "说明\n"
         "单群模式下可以省略编号或群号。\n"
