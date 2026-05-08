@@ -32,6 +32,8 @@ jobs:
             PROJECT_DIR="/home/ubuntu/Monitor"
             SERVICE_NAME="qq-forward-bot"
             BACKUP_DIR="$PROJECT_DIR/.deploy_backup"
+            RUNTIME_BACKUP_DIR="$BACKUP_DIR/runtime_data"
+            RUNTIME_FILES="rules.json reminders.json keywords.json .env"
 
             echo -e "${GREEN}=== 部署开始 ===${NC}"
             echo "时间: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -42,17 +44,30 @@ jobs:
             echo -e "\n${GREEN}[1/10] 进入项目目录${NC}"
             cd "$PROJECT_DIR" || { echo -e "${RED}✗ 项目目录不存在${NC}"; exit 1; }
 
-            # 2. 备份当前版本
-            echo -e "\n${GREEN}[2/10] 备份当前版本${NC}"
-            mkdir -p "$BACKUP_DIR"
+            # 2. 备份当前版本与运行时数据
+            echo -e "\n${GREEN}[2/10] 备份当前版本与运行时数据${NC}"
+            mkdir -p "$BACKUP_DIR" "$RUNTIME_BACKUP_DIR"
+            rm -f "$RUNTIME_BACKUP_DIR"/*
             CURRENT_COMMIT=$(git rev-parse HEAD)
             echo "$CURRENT_COMMIT" > "$BACKUP_DIR/last_commit.txt"
             echo "备份提交: $CURRENT_COMMIT"
+            for file in $RUNTIME_FILES; do
+              if [ -f "$file" ]; then
+                cp -p "$file" "$RUNTIME_BACKUP_DIR/$file"
+                echo "已备份运行时数据: $file"
+              fi
+            done
 
             # 3. 拉取最新代码
             echo -e "\n${GREEN}[3/10] 拉取最新代码${NC}"
             git fetch origin main
             git reset --hard origin/main
+            for file in $RUNTIME_FILES; do
+              if [ -f "$RUNTIME_BACKUP_DIR/$file" ]; then
+                cp -p "$RUNTIME_BACKUP_DIR/$file" "$file"
+                echo "已恢复运行时数据: $file"
+              fi
+            done
             NEW_COMMIT=$(git rev-parse HEAD)
             echo "新提交: $NEW_COMMIT"
 
@@ -146,6 +161,12 @@ jobs:
               # 回滚
               echo -e "\n${YELLOW}回滚到上一版本...${NC}"
               git reset --hard "$CURRENT_COMMIT"
+              for file in $RUNTIME_FILES; do
+                if [ -f "$RUNTIME_BACKUP_DIR/$file" ]; then
+                  cp -p "$RUNTIME_BACKUP_DIR/$file" "$file"
+                  echo "已恢复运行时数据: $file"
+                fi
+              done
               sudo systemctl restart "$SERVICE_NAME"
               sleep 3
 
