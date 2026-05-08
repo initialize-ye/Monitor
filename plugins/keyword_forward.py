@@ -369,13 +369,13 @@ def _build_admin_help() -> str:
     return (
         "关键词监控\n"
         "status                      查看规则状态\n"
-        "add <关键词>                添加单个关键词\n"
-        "add <词1,词2,词3>           批量添加关键词\n"
-        "remove <编号>               删除指定关键词\n"
-        "remove <1,2,3>              批量删除关键词\n"
-        "set <词1,词2>               替换全部关键词\n"
-        "disable <编号>              临时禁用关键词\n"
-        "enable <编号>               恢复禁用关键词\n"
+        "add <群号|编号> <关键词>      添加单个关键词\n"
+        "add <群号|编号> <词1,词2>     批量添加关键词\n"
+        "remove <群号|编号> <编号>     删除指定关键词\n"
+        "remove <群号|编号> <1,2,3>    批量删除关键词\n"
+        "set <群号|编号> <词1,词2>     替换全部关键词\n"
+        "disable <群号|编号> <编号>    临时禁用关键词\n"
+        "enable <群号|编号> <编号>     恢复禁用关键词\n"
         "stats                       查看今日统计\n"
         "quote [HH:MM]               设置每日一言定时\n"
         "on / off                    启用/禁用监听\n"
@@ -394,9 +394,9 @@ def _build_admin_help() -> str:
         "\n"
         "高级管理\n"
         "rule addgroup <群号>                添加群规则\n"
-        "rule delgroup <群号>                删除群规则\n"
-        "rule addtarget <群号> <QQ>          添加转发目标\n"
-        "rule deltarget <群号> <QQ>          删除转发目标\n"
+        "rule delgroup <群号|编号>          删除群规则\n"
+        "rule addtarget <群号|编号> <QQ>    添加转发目标\n"
+        "rule deltarget <群号|编号> <QQ>    删除转发目标\n"
         "\n"
         "提示: 提示\n"
         "• 单群模式下关键词命令无需群号\n"
@@ -405,10 +405,10 @@ def _build_admin_help() -> str:
     )
 
 
-def _render_rule(rule: dict) -> str:
+def _render_rule(rule: dict, index: int | None = None) -> str:
     """Render rule with modern formatting."""
-    # Status badge
     status_badge = "成功: 已启用" if rule['enabled'] else "禁用 已禁用"
+    group_name = str(rule.get("group_name") or "未知")
 
     # Keywords section
     if rule["keywords"]:
@@ -429,8 +429,11 @@ def _render_rule(rule: dict) -> str:
         kw_summary = "暂无关键词"
         kw_section = "  (空)"
 
+    rule_no = f"规则编号: {index}\n" if index is not None else ""
     return (
         f"群组信息\n"
+        f"{rule_no}"
+        f"群名: {group_name}\n"
         f"群号: {rule['group_id']}\n"
         f"状态: {status_badge}\n"
         f"转发目标: {', '.join(map(str, rule['targets'])) or '未设置'}\n"
@@ -441,9 +444,9 @@ def _render_rule(rule: dict) -> str:
     )
 
 
-def _render_rule_with_menu(rule: dict) -> str:
+def _render_rule_with_menu(rule: dict, index: int | None = None) -> str:
     """Render rule with interactive menu options."""
-    base = _render_rule(rule)
+    base = _render_rule(rule, index=index)
     menu = (
         "\n\n"
         "快捷操作菜单\n"
@@ -483,6 +486,34 @@ def _resolve_group_id(text: str) -> tuple[int | None, str | None]:
 
     keyword = first.strip()
     return (None, keyword)
+
+
+def _rule_by_index(rules: list[dict], index: int) -> dict | None:
+    if 1 <= index <= len(rules):
+        return rules[index - 1]
+    return None
+
+
+def _resolve_rule_reference(rules: list[dict], value: int) -> dict | None:
+    return find_rule(rules, value) or _rule_by_index(rules, value)
+
+
+def _rule_index(rules: list[dict], group_id: int) -> int | None:
+    return next((i for i, rule in enumerate(rules, 1) if rule["group_id"] == group_id), None)
+
+
+async def _annotate_group_names(bot: Bot, rules: list[dict]) -> list[dict]:
+    annotated = []
+    for rule in rules:
+        item = dict(rule)
+        try:
+            info = await bot.call_api("get_group_info", group_id=rule["group_id"], no_cache=False)
+            item["group_name"] = info.get("group_name") or info.get("group_remark") or "未知"
+        except Exception as exc:
+            logger.warning("Failed to get group name for %s: %s", rule["group_id"], exc)
+            item["group_name"] = "未知"
+        annotated.append(item)
+    return annotated
 
 
 # --- group message handler ---
@@ -572,41 +603,45 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         if not rules:
             await _reply_private(bot, user_id, "当前没有任何群规则")
             return
+        display_rules = await _annotate_group_names(bot, rules)
         group_id_arg, _ = _resolve_group_id(text)
         if group_id_arg is not None:
-            rule = find_rule(rules, group_id_arg)
+            rule = _resolve_rule_reference(display_rules, group_id_arg)
             if not rule:
-                await _reply_private(bot, user_id, f"群 {group_id_arg} 不存在")
+                await _reply_private(bot, user_id, f"群或规则编号 {group_id_arg} 不存在")
                 return
-            # Set session state for interactive menu
+            index = next((i for i, item in enumerate(display_rules, 1) if item["group_id"] == rule["group_id"]), None)
             if not await _set_session_or_reply(bot, user_id, "menu_status", group_id=rule["group_id"]):
                 return
-            await _reply_image(bot, user_id, _render_rule_with_menu(rule), title=f"群 {rule['group_id']}")
+            await _reply_image(bot, user_id, _render_rule_with_menu(rule, index=index), title=f"群 {rule['group_id']}")
         else:
-            if len(rules) == 1:
-                # Single rule: show with menu
-                if not await _set_session_or_reply(bot, user_id, "menu_status", group_id=rules[0]["group_id"]):
+            if len(display_rules) == 1:
+                rule = display_rules[0]
+                if not await _set_session_or_reply(bot, user_id, "menu_status", group_id=rule["group_id"]):
                     return
-                await _reply_image(bot, user_id, _render_rule_with_menu(rules[0]), title=f"群 {rules[0]['group_id']}")
+                await _reply_image(bot, user_id, _render_rule_with_menu(rule, index=1), title=f"群 {rule['group_id']}")
             else:
-                # Multiple rules: show list without menu
-                await _reply_image(bot, user_id, "\n\n".join(_render_rule(r) for r in rules), title="规则列表")
+                await _reply_image(
+                    bot, user_id,
+                    "\n\n".join(_render_rule(r, index=i) for i, r in enumerate(display_rules, 1)),
+                    title="规则列表"
+                )
         return
 
     if command in {"on", "off"}:
         group_id_arg, _ = _resolve_group_id(text)
         if group_id_arg is None and len(rules) != 1:
-            await _reply_private(bot, user_id, "存在多个群规则，请指定群号: on <群号>")
+            await _reply_private(bot, user_id, "存在多个群规则，请指定群号或规则编号: on <群号|编号>")
             return
         group_id = group_id_arg if group_id_arg is not None else rules[0]["group_id"]
-        rule = find_rule(rules, group_id)
+        rule = _resolve_rule_reference(rules, group_id)
         if not rule:
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            await _reply_private(bot, user_id, f"群或规则编号 {group_id} 不存在")
             return
         rule["enabled"] = command == "on"
         if await _save_rules_or_reply(bot, user_id, upsert_rule(rules, rule)) is None:
             return
-        await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {rule['group_id']}")
+        await _reply_image(bot, user_id, _render_rule(rule, index=_rule_index(rules, rule["group_id"])), title=f"群 {rule['group_id']}")
         return
 
     if command == "remove":
@@ -621,15 +656,16 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             indices_str = parts[2]
         else:
             if len(rules) != 1:
-                await _reply_private(bot, user_id, "存在多个群规则，请指定群号: remove <群号> <编号>")
+                await _reply_private(bot, user_id, "存在多个群规则，请指定群号或规则编号: remove <群号|编号> <关键词编号>")
                 return
             group_id = rules[0]["group_id"]
             indices_str = parts[1]
 
-        rule = find_rule(rules, group_id)
+        rule = _resolve_rule_reference(rules, group_id)
         if not rule:
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            await _reply_private(bot, user_id, f"群或规则编号 {group_id} 不存在")
             return
+        group_id = rule["group_id"]
 
         # Parse indices (support comma-separated)
         indices, error = _parse_indices(indices_str)
@@ -651,7 +687,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             if await _save_rules_or_reply(bot, user_id, upsert_rule(rules, rule)) is None:
                 return
             removed_names = ", ".join(f"{kw['word']}" for kw in removed)
-            msg = f"成功: 已删除 {len(removed)} 个关键词: {removed_names}\n\n{_render_rule(rule)}"
+            msg = f"成功: 已删除 {len(removed)} 个关键词: {removed_names}\n\n{_render_rule(rule, index=_rule_index(rules, rule['group_id']))}"
             if invalid:
                 msg = f"注意: 编号 {', '.join(map(str, invalid))} 不存在\n\n" + msg
             await _reply_image(bot, user_id, msg, title=f"群 {group_id}")
@@ -665,12 +701,12 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             await _reply_private(bot, user_id, f"用法: {command} [群号] <关键词>\n支持批量: {command} 鞋子,裤子,衣服")
             return
         if group_id_arg is None and len(rules) != 1:
-            await _reply_private(bot, user_id, f"存在多个群规则，请指定群号: {command} <群号> <关键词>")
+            await _reply_private(bot, user_id, f"存在多个群规则，请指定群号或规则编号: {command} <群号|编号> <关键词>")
             return
         group_id = group_id_arg if group_id_arg is not None else rules[0]["group_id"]
-        rule = find_rule(rules, group_id)
+        rule = _resolve_rule_reference(rules, group_id)
         if not rule:
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            await _reply_private(bot, user_id, f"群或规则编号 {group_id} 不存在")
             return
 
         # Parse keywords (support comma-separated)
@@ -692,7 +728,7 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
             if added:
                 if await _save_rules_or_reply(bot, user_id, upsert_rule(rules, rule)) is None:
                     return
-                msg = f"成功: 已添加 {len(added)} 个关键词: {', '.join(added)}\n\n{_render_rule(rule)}"
+                msg = f"成功: 已添加 {len(added)} 个关键词: {', '.join(added)}\n\n{_render_rule(rule, index=_rule_index(rules, rule['group_id']))}"
                 if skipped:
                     msg = f"注意: 已存在: {', '.join(skipped)}\n\n" + msg
                 await _reply_image(bot, user_id, msg, title=f"群 {group_id}")
@@ -740,21 +776,22 @@ async def _handle_command(bot: Bot, user_id: int, command: str, text: str) -> No
         else:
             idx = int(parts[1])
             if len(rules) != 1:
-                await _reply_private(bot, user_id, f"存在多个群规则，请指定群号: {command} <群号> <编号>")
+                await _reply_private(bot, user_id, f"存在多个群规则，请指定群号或规则编号: {command} <群号|编号> <关键词编号>")
                 return
             group_id = rules[0]["group_id"]
 
-        rule = find_rule(rules, group_id)
+        rule = _resolve_rule_reference(rules, group_id)
         if not rule:
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            await _reply_private(bot, user_id, f"群或规则编号 {group_id} 不存在")
             return
+        group_id = rule["group_id"]
         if 1 <= idx <= len(rule["keywords"]):
             rule["keywords"][idx - 1]["enabled"] = command == "enable"
             if await _save_rules_or_reply(bot, user_id, upsert_rule(rules, rule)) is None:
                 return
             status = "已启用" if command == "enable" else "已禁用"
             kw_name = rule['keywords'][idx - 1]['word']
-            await _reply_image(bot, user_id, f"成功: {status}关键词: {kw_name}\n\n{_render_rule(rule)}", title=f"群 {group_id}")
+            await _reply_image(bot, user_id, f"成功: {status}关键词: {kw_name}\n\n{_render_rule(rule, index=_rule_index(rules, rule['group_id']))}", title=f"群 {group_id}")
         else:
             await _reply_private(bot, user_id, f"编号 {idx} 不存在，当前共 {len(rule['keywords'])} 个关键词")
         return
@@ -801,10 +838,11 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
         except ValueError:
             await _reply_private(bot, user_id, f"无效的群号: {parts[2]}")
             return
-        rule = find_rule(rules, group_id)
+        rule = _resolve_rule_reference(rules, group_id)
         if not rule:
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            await _reply_private(bot, user_id, f"群或规则编号 {group_id} 不存在")
             return
+        group_id = rule["group_id"]
         if not await _set_session_or_reply(bot, user_id, "confirm_rule_delgroup", group_id=group_id):
             return
         await _reply_private(
@@ -825,16 +863,17 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
         except ValueError:
             await _reply_private(bot, user_id, "无效的群号或QQ号")
             return
-        rule = find_rule(rules, group_id)
+        rule = _resolve_rule_reference(rules, group_id)
         if not rule:
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            await _reply_private(bot, user_id, f"群或规则编号 {group_id} 不存在")
             return
+        group_id = rule["group_id"]
         targets = set(rule["targets"])
         targets.add(target)
         rule["targets"] = sorted(targets)
         if await _save_rules_or_reply(bot, user_id, upsert_rule(rules, rule)) is None:
             return
-        await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {group_id}")
+        await _reply_image(bot, user_id, _render_rule(rule, index=_rule_index(rules, rule["group_id"])), title=f"群 {group_id}")
 
     elif sub == "deltarget":
         if len(parts) < 4:
@@ -846,10 +885,11 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
         except ValueError:
             await _reply_private(bot, user_id, "无效的群号或QQ号")
             return
-        rule = find_rule(rules, group_id)
+        rule = _resolve_rule_reference(rules, group_id)
         if not rule:
-            await _reply_private(bot, user_id, f"群 {group_id} 不存在")
+            await _reply_private(bot, user_id, f"群或规则编号 {group_id} 不存在")
             return
+        group_id = rule["group_id"]
         targets = set(rule["targets"])
         if target not in targets:
             await _reply_private(bot, user_id, f"QQ {target} 不在群 {group_id} 的转发目标中")
@@ -858,7 +898,7 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
         rule["targets"] = sorted(targets)
         if await _save_rules_or_reply(bot, user_id, upsert_rule(rules, rule)) is None:
             return
-        await _reply_image(bot, user_id, _render_rule(rule), title=f"群 {group_id}")
+        await _reply_image(bot, user_id, _render_rule(rule, index=_rule_index(rules, rule["group_id"])), title=f"群 {group_id}")
 
     else:
         await _reply_image(bot, user_id, _build_admin_help(), title="帮助")
@@ -1016,7 +1056,7 @@ async def _handle_session_input(bot: Bot, user_id: int, text: str) -> bool:
                 return True
 
             removed_names = ", ".join(kw["word"] for kw in removed)
-            msg = f"成功: 已删除 {len(removed)} 个关键词: {removed_names}\n\n{_render_rule(rule)}"
+            msg = f"成功: 已删除 {len(removed)} 个关键词: {removed_names}\n\n{_render_rule(rule, index=_rule_index(rules, rule['group_id']))}"
             if invalid:
                 msg = f"注意: 编号 {', '.join(map(str, invalid))} 不存在\n\n" + msg
             await _session_manager.clear_state(user_id)
@@ -1053,7 +1093,7 @@ async def _handle_session_input(bot: Bot, user_id: int, text: str) -> bool:
             if await _save_rules_or_reply(bot, user_id, upsert_rule(rules, rule)) is None:
                 return True
 
-            msg = f"成功: 已切换 {len(changed)} 个关键词\n" + "\n".join(changed) + f"\n\n{_render_rule(rule)}"
+            msg = f"成功: 已切换 {len(changed)} 个关键词\n" + "\n".join(changed) + f"\n\n{_render_rule(rule, index=_rule_index(rules, rule['group_id']))}"
             if invalid:
                 msg = f"注意: 编号 {', '.join(map(str, invalid))} 不存在\n\n" + msg
             await _session_manager.clear_state(user_id)
@@ -1079,7 +1119,7 @@ async def _handle_session_input(bot: Bot, user_id: int, text: str) -> bool:
             if await _save_rules_or_reply(bot, user_id, upsert_rule(rules, rule)) is None:
                 return True
             await _session_manager.clear_state(user_id)
-            await _reply_image(bot, user_id, f"成功: 已替换为 {len(keywords)} 个关键词\n\n{_render_rule(rule)}", title=f"群 {group_id}")
+            await _reply_image(bot, user_id, f"成功: 已替换为 {len(keywords)} 个关键词\n\n{_render_rule(rule, index=_rule_index(rules, rule['group_id']))}", title=f"群 {group_id}")
             return True
 
         elif state == "confirm_rule_delgroup":
