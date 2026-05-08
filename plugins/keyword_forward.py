@@ -55,7 +55,7 @@ _session_manager = SessionManager(timeout_seconds=300, max_sessions=1000)
 # Message buffer for merging forwards (group_id -> list of pending messages)
 _message_buffer: dict[int, list[dict]] = {}
 _message_buffer_tasks: set[int] = set()
-_buffer_timeout_seconds = 3  # Merge messages within 3 seconds
+_buffer_timeout_seconds = 8  # Merge messages within 8 seconds
 
 
 def _check_keyword_cooldown(group_id: int, word: str) -> bool:
