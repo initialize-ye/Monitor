@@ -503,22 +503,36 @@ def _rule_index(rules: list[dict], group_id: int) -> int | None:
 
 
 def _clean_display_text(text: str) -> str:
-    text = re.sub(r"[\U0001F300-\U0001FAFF☀-➿]", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
+    cleaned = []
+    for char in text:
+        code = ord(char)
+        if (
+            0x1F1E6 <= code <= 0x1F1FF  # regional indicator flags
+            or 0x1F300 <= code <= 0x1FAFF
+            or 0x2600 <= code <= 0x27BF
+            or code in {0x200D, 0xFE0F, 0x20E3}
+        ):
+            continue
+        cleaned.append(char)
+    text = re.sub(r"\s+", " ", "".join(cleaned)).strip()
     return text or "未知"
+
+
+async def _get_group_name(bot: Bot, group_id: int) -> str:
+    try:
+        info = await bot.call_api("get_group_info", group_id=group_id, no_cache=False)
+        raw_name = info.get("group_name") or info.get("group_remark") or "未知"
+        return _clean_display_text(str(raw_name))
+    except Exception as exc:
+        logger.warning("Failed to get group name for %s: %s", group_id, exc)
+        return "未知"
 
 
 async def _annotate_group_names(bot: Bot, rules: list[dict]) -> list[dict]:
     annotated = []
     for rule in rules:
         item = dict(rule)
-        try:
-            info = await bot.call_api("get_group_info", group_id=rule["group_id"], no_cache=False)
-            raw_name = info.get("group_name") or info.get("group_remark") or "未知"
-            item["group_name"] = _clean_display_text(str(raw_name))
-        except Exception as exc:
-            logger.warning("Failed to get group name for %s: %s", rule["group_id"], exc)
-            item["group_name"] = "未知"
+        item["group_name"] = await _get_group_name(bot, rule["group_id"])
         annotated.append(item)
     return annotated
 
@@ -832,9 +846,11 @@ async def _handle_rule_advanced(bot: Bot, user_id: int, parts: list[str]) -> Non
             "enabled": True,
             "use_regex": USE_REGEX,
         }
-        if await _save_rules_or_reply(bot, user_id, upsert_rule(rules, new_rule)) is None:
+        updated_rules = upsert_rule(rules, new_rule)
+        if await _save_rules_or_reply(bot, user_id, updated_rules) is None:
             return
-        await _reply_image(bot, user_id, f"已添加群规则\n{_render_rule(new_rule)}", title=f"群 {group_id}")
+        new_rule["group_name"] = await _get_group_name(bot, group_id)
+        await _reply_image(bot, user_id, f"已添加群规则\n{_render_rule(new_rule, index=_rule_index(updated_rules, group_id))}", title=f"群 {group_id}")
 
     elif sub == "delgroup":
         if len(parts) < 3:
