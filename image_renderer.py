@@ -1,4 +1,4 @@
-"""Render text to styled PNG images using Pillow, for use as QQ image messages."""
+"""使用 Pillow 将文本渲染为样式化 PNG 图片，用于 QQ 图片消息。"""
 
 import base64
 import io
@@ -87,17 +87,21 @@ def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, 
         if _measure(draw, paragraph, font)[0] <= max_width:
             lines.append(paragraph)
             continue
-        current = ""
-        for char in paragraph:
-            test = current + char
-            if _measure(draw, test, font)[0] <= max_width:
-                current = test
-            else:
-                if current:
-                    lines.append(current)
-                current = char
-        if current:
-            lines.append(current)
+        # Binary search for break point instead of per-character measurement
+        remaining = paragraph
+        while remaining:
+            if _measure(draw, remaining, font)[0] <= max_width:
+                lines.append(remaining)
+                break
+            lo, hi = 1, len(remaining)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if _measure(draw, remaining[:mid], font)[0] <= max_width:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            lines.append(remaining[:lo])
+            remaining = remaining[lo:]
     return lines
 
 
@@ -144,6 +148,7 @@ def _text_y(y: int, row_height: int, font_size: int) -> int:
 
 
 def render_text_to_image(text: str, title: str = "Bot") -> str:
+    """将样式文本渲染为 PNG 图片，返回 base64 data URI。"""
     font = _get_font(FONT_SIZE)
     header_font = _get_font(HEADER_FONT_SIZE)
     title_font = _get_font(TITLE_FONT_SIZE)

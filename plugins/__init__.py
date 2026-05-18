@@ -1,1 +1,1 @@
-# Plugin package marker.
+"""插件包。"""

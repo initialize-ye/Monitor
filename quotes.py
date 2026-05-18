@@ -1,4 +1,4 @@
-"""Fetch a random quote from the hitokoto API, with a local fallback."""
+"""从 hitokoto API 获取随机名言，失败时使用本地备选。"""
 
 import random
 
@@ -59,10 +59,10 @@ _FALLBACK = [
 
 
 async def random_quote() -> str:
-    """Fetch a random quote from hitokoto API.
+    """从 hitokoto API 获取随机名言。
 
-    Returns a formatted string like: 内容 —— 来源
-    Falls back to a local list on failure.
+    返回格式: 内容 —— 来源
+    失败时从本地列表随机选取。
     """
     try:
         async with httpx.AsyncClient(timeout=5) as client:

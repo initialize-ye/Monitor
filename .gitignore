@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+reminders.json
+stats.json
+rules.json
+.pytest_cache/
+NapCatQQ.html
+NapCatQQ_files/
+.*.tmp.

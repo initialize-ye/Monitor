@@ -1,3 +1,5 @@
+"""提醒管理共享模块。"""
+
 import json
 import os
 import tempfile
@@ -7,6 +9,7 @@ REMINDERS_FILE = Path(os.getenv("REMINDERS_FILE", "reminders.json"))
 
 
 def load_reminders() -> list[dict]:
+    """从 REMINDERS_FILE 加载提醒列表，文件缺失或损坏时抛出异常。"""
     if not REMINDERS_FILE.exists():
         return []
     try:
@@ -22,23 +25,31 @@ def load_reminders() -> list[dict]:
 
 
 def save_reminders(reminders: list[dict]) -> None:
+    """原子写入提醒到 REMINDERS_FILE（临时文件 + rename）。"""
     content = json.dumps({"reminders": reminders}, ensure_ascii=False, indent=2) + "\n"
     fd, tmp_path = tempfile.mkstemp(
         dir=str(REMINDERS_FILE.parent),
         prefix=f".{REMINDERS_FILE.name}.tmp.",
     )
     try:
-        os.write(fd, content.encode("utf-8"))
+        try:
+            os.write(fd, content.encode("utf-8"))
+        except OSError:
+            os.close(fd)
+            raise
+        else:
+            os.close(fd)
+        os.replace(tmp_path, REMINDERS_FILE)
     except OSError:
-        os.close(fd)
-        os.unlink(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
         raise
-    else:
-        os.close(fd)
-    os.replace(tmp_path, REMINDERS_FILE)
 
 
 def normalize_reminder(reminder: dict) -> dict:
+    """规范化提醒字典：类型转换、验证类型、设置默认值。"""
     raw_type = reminder.get("type", "daily")
     rem_type = raw_type if raw_type in ("daily", "once", "workday", "interval", "period") else "daily"
     normalized = {
@@ -69,6 +80,7 @@ def normalize_reminder(reminder: dict) -> dict:
 
 
 def next_reminder_id(reminders: list[dict]) -> int:
+    """获取下一个可用提醒 ID（最大值 + 1，空列表返回 1）。"""
     if not reminders:
         return 1
     return max(r["id"] for r in reminders) + 1
